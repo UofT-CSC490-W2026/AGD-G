@@ -95,9 +95,9 @@ def get_image(key: UUID | str) -> bytes:
     return response["Body"].read()
 
 
-def create_schema_if_not_exists() -> None:
+def create_table_if_not_exists() -> None:
     """
-    Create the SQL schema for this project's test data, and do nothing
+    Create the SQL table for this project's test data, and do nothing
     if it already exists.
     """
     with get_db_connection() as conn:
@@ -145,3 +145,25 @@ def add_sample_row(
             """,
             (source, str(graph_type), question, answer, str(graph))
         )
+
+def wipe_rds() -> None:
+    with get_db_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("DROP TABLE IF EXISTS samples")
+            cursor.execute("DROP TYPE IF EXISTS graph_type")
+
+def wipe_s3(logger=None) -> None:
+    """
+    Delete all the images in the S3 bucket
+    """
+    s3 = boto3.client("s3")
+    paginator = s3.get_paginator("list_objects_v2")
+    for page in paginator.paginate(Bucket=BUCKET, Prefix=IMAGE_PREFIX):
+        objects = page.get("Contents", [])
+        if objects:
+            s3.delete_objects(
+                Bucket=BUCKET,
+                Delete={"Objects": [{"Key": o["Key"]} for o in objects]},
+            )
+            if logger:
+                logger.info(f"  Deleted {len(objects)} S3 objects")

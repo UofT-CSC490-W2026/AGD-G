@@ -30,12 +30,17 @@ app = modal.App(
         ],
     )
 
-@app.function()
-def main(import_limit : int | None = 20):
+@app.function(
+    timeout=3600,
+    memory=4096,
+)
+def main(max_rows : int | None = None):
     """Load ChartQA-X dataset, extract chart images and QA pairs, and process each row."""
     from datasets import load_dataset
     from huggingface_hub import hf_hub_download
     import zipfile
+
+    aws.create_table_if_not_exists()
 
     # Load ChartQA-X dataset metadata (splits and row references)
     repo_id = "shamanthakhegde/ChartQA-X"
@@ -59,7 +64,7 @@ def main(import_limit : int | None = 20):
 
     with aws.get_db_connection() as conn:
         with conn.cursor() as cursor:
-            import_dataset(ds, cursor, extract_path, zip_root, import_limit)
+            import_dataset(ds, cursor, extract_path, zip_root, max_rows)
 
 def import_dataset(ds, cursor, extract_path, zip_root, import_limit : int | None) -> None:
     import re
@@ -177,4 +182,4 @@ def local_entrypoint(*arglist):
     parser = argparse.ArgumentParser()
     parser.add_argument("-l", "--limit", type=int, default=None, help="Maximum number of samples to import")
     args = parser.parse_args(args=arglist)
-    main.remote(import_limit=args.limit)
+    main.remote(max_args=args.limit)

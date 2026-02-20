@@ -4,17 +4,13 @@ import logging
 import shutil
 import zipfile
 
-from aws import (
-    get_db_connection, put_image, create_schema_if_not_exists,
-    GraphType, BUCKET, IMAGE_PREFIX,
-)
+import aws
+from aws import GraphType
 
 # Modal setup
-app = modal.App("agd-chartbench-pipeline")
-
 image = (
     modal.Image.debian_slim(python_version="3.11")
-    .pip_install(
+    .uv_pip_install(
         "datasets",
         "huggingface_hub",
         "boto3",
@@ -22,6 +18,16 @@ image = (
         "Pillow",
     )
     .add_local_file("aws.py", "/root/aws.py")
+)
+
+app = modal.App(
+    "agd-chartbench-pipeline",
+    image=image,
+    secrets=[
+        modal.Secret.from_name("aws"),
+        modal.Secret.from_name("aws-rds"),
+        modal.Secret.from_name("huggingface"),
+    ],
 )
 
 # Configuration
@@ -49,19 +55,12 @@ CHARTBENCH_TYPE_MAP: dict[str, GraphType] = {
 # Core import logic
 
 @app.function(
-    image=image,
-    secrets=[
-        modal.Secret.from_name("aws"),
-        modal.Secret.from_name("aws-rds"),
-    ],
     timeout=3600,
     memory=4096,
 )
 def import_chartbench(max_rows: int = 0, clean: bool = False):
-    import boto3
     from datasets import load_dataset
     from huggingface_hub import hf_hub_download
-    from PIL import Image
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     log = logging.getLogger("import_chartbench")
@@ -69,25 +68,12 @@ def import_chartbench(max_rows: int = 0, clean: bool = False):
     # ── Clean (optional) ─────────────────────────────────────────────
     if clean:
         log.info("CLEANING...")
-        with get_db_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute("DROP TABLE IF EXISTS samples")
-                cur.execute("DROP TYPE IF EXISTS graph_type")
-
-        s3 = boto3.client("s3")
-        paginator = s3.get_paginator("list_objects_v2")
-        for page in paginator.paginate(Bucket=BUCKET, Prefix=IMAGE_PREFIX + "/"):
-            objects = page.get("Contents", [])
-            if objects:
-                s3.delete_objects(
-                    Bucket=BUCKET,
-                    Delete={"Objects": [{"Key": o["Key"]} for o in objects]},
-                )
-                log.info(f"  Deleted {len(objects)} S3 objects")
+        aws.wipe_s3(logger=log)
+        aws.wipe_rds()
         log.info("Clean done\n")
 
     # Create schema
-    create_schema_if_not_exists()
+    aws.create_table_if_not_exists()
     log.info("Schema ready")
 
     # Download and extract images
@@ -105,16 +91,8 @@ def import_chartbench(max_rows: int = 0, clean: bool = False):
     # Load dataset
     log.info(f"Loading {HF_DATASET_ID} split={HF_SPLIT} ...")
     ds = load_dataset(HF_DATASET_ID, HF_SUBSET, split=HF_SPLIT)
-    total = min(max_rows, len(ds)) if max_rows > 0 else len(ds)
+    total = min(max_rows, len(ds)) if max_rows is not None else len(ds)
     log.info(f"Processing {total} of {len(ds)} rows")
-
-    # Process rows
-    INSERT_SQL = """
-        INSERT INTO samples (
-            source, graph_type, question, good_answer,
-            raw_graph, original_width, original_height
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s)
-    """
 
     # hf_image_path → (uuid_str, width, height)
     uploaded: dict[str, tuple[str, int, int]] = {}
@@ -122,8 +100,8 @@ def import_chartbench(max_rows: int = 0, clean: bool = False):
     skipped = 0
     unmapped_types: set[str] = set()
 
-    with get_db_connection() as conn:
-        with conn.cursor() as cur:
+    with aws.get_db_connection() as conn:
+        with conn.cursor() as cursor:
             for i, row in enumerate(ds):
                 if i >= total:
                     break
@@ -149,26 +127,22 @@ def import_chartbench(max_rows: int = 0, clean: bool = False):
                         skipped += 1
                         continue
 
-                    with Image.open(local_src) as img:
-                        width, height = img.size
-
                     with open(local_src, "rb") as f:
-                        image_uuid = put_image(f.read())
+                        image_uuid = aws.put_image(f.read())
 
-                    uploaded[img_path] = (str(image_uuid), width, height)
+                    uploaded[img_path] = str(image_uuid)
 
                 # Insert QA row
-                image_uuid_str, width, height = uploaded[img_path]
+                image_uuid_str = uploaded[img_path]
 
-                cur.execute(INSERT_SQL, (
-                    "ChartBench",
-                    str(graph_type),
-                    row["conversation"][0]["query"],
-                    row["conversation"][0]["label"],
-                    image_uuid_str,
-                    width,
-                    height,
-                ))
+                aws.add_sample_row(
+                        cursor,
+                        "ChartBench",
+                        str(graph_type),
+                        row["conversation"][0]["query"],
+                        row["conversation"][0]["label"],
+                        image_uuid_str
+                    )
                 inserted += 1
 
                 if inserted % BATCH_SIZE == 0:
@@ -189,9 +163,17 @@ def import_chartbench(max_rows: int = 0, clean: bool = False):
         "unique_images": len(uploaded),
     }
 
-# Entrypoint
-@app.local_entrypoint()
-def main(max_rows: int = 0, clean: bool = False):
+def main(max_rows: int | None = None, clean: bool = False):
     result = import_chartbench.remote(max_rows=max_rows, clean=clean)
     for k, v in result.items():
         print(f"  {k:20s}: {v}")
+
+
+@app.local_entrypoint()
+def local_entrypoint(*arglist):
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-l", "--limit", type=int, default=None, help="Maximum number of samples to import")
+    parser.add_argument("-c", "--clean", action="store_true", help="Wipe database before import")
+    args = parser.parse_args(args=arglist)
+    main(max_rows=args.limit, clean=args.clean)

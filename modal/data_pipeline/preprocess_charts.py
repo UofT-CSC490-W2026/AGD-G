@@ -108,6 +108,7 @@ def preprocess_single(img_bytes: bytes) -> Optional[dict]:
 
     img = Image.open(io.BytesIO(img_bytes))
     img = convert_to_rgb(img)
+    original_width, original_height = img.size
     img, crop_box = auto_crop_whitespace(img)
     img, letterbox_meta = letterbox_resize(img, TARGET_SIZE)
 
@@ -116,6 +117,8 @@ def preprocess_single(img_bytes: bytes) -> Optional[dict]:
 
     return {
         "image_bytes": buf.getvalue(),
+        "original_width": original_width,
+        "original_height": original_height,
         "meta": {
             "crop_box": crop_box,
             "scale": letterbox_meta["scale"],
@@ -189,13 +192,15 @@ def preprocess_all():
 
                 # Update all rows sharing this raw_graph
                 meta_json = json.dumps(result["meta"])
+                original_width = result["original_width"]
+                original_height = result["original_height"]
                 cur.execute(
                     """
                     UPDATE samples
-                    SET good_graph = %s, preprocess_meta = %s
+                    SET good_graph = %s, preprocess_meta = %s, original_width = %s, original_height = %s
                     WHERE raw_graph = %s AND good_graph IS NULL
                     """,
-                    (str(processed_uuid), meta_json, str(raw_uuid)),
+                    (str(processed_uuid), meta_json, original_width, original_height, str(raw_uuid)),
                 )
                 rows_updated += cur.rowcount
                 processed_count += 1
