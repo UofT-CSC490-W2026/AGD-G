@@ -4,10 +4,38 @@ import boto3
 from botocore.exceptions import ClientError
 import psycopg2
 from contextlib import contextmanager
+from enum import Enum
 
 BUCKET='agd-dev-tyson'
 RDS_HOST='agd-dev-postgres.cdsyi46ammw7.ca-central-1.rds.amazonaws.com'
 IMAGE_PREFIX='samples'
+
+class GraphType(Enum):
+    THREE_D = 1
+    AREA = 2
+    BAR = 3
+    BOX = 4
+    CANDLE = 5
+    HEATMAP = 6
+    LINE = 7
+    NODE = 8
+    OTHER = 9
+    PIE = 10
+    RADAR = 11
+    SCATTER = 12
+    TREEMAP = 13
+
+    def __str__(self):
+        return self.name
+
+    @staticmethod
+    def get_names():
+        """
+        Get names in the enum format PostgreSQL expects, like
+        'FOO', 'BAR', 'BAZ'
+        """
+        return ", ".join(f"'{member.name}'" for member in GraphType)
+
 
 @contextmanager
 def get_db_connection():
@@ -73,10 +101,10 @@ def create_schema_if_not_exists() -> None:
     """
     with get_db_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute("""
+            cur.execute(f"""
                 DO $$
                 BEGIN
-                    CREATE TYPE CHART_TYPE AS ENUM ('bar', 'line', 'pie', 'scatter');
+                    CREATE TYPE GRAPH_TYPE AS ENUM ({GraphType.get_names()});
                 EXCEPTION
                     WHEN duplicate_object THEN NULL;
                 END $$;
@@ -85,7 +113,7 @@ def create_schema_if_not_exists() -> None:
                 CREATE TABLE IF NOT EXISTS samples (
                     id                SERIAL PRIMARY KEY,
                     source            TEXT NOT NULL,
-                    graph_type        CHART_TYPE NOT NULL,
+                    graph_type        GRAPH_TYPE NOT NULL,
                     question          TEXT NOT NULL,
                     good_answer       TEXT NOT NULL,
                     raw_graph         UUID NOT NULL,
@@ -101,3 +129,18 @@ def create_schema_if_not_exists() -> None:
                     created_at        TIMESTAMP NOT NULL DEFAULT NOW()
                 );
             """)
+
+def add_sample_row(
+        cursor,
+        source: str,
+		graph_type: GraphType,
+		question: str,
+		answer: str,
+        graph: UUID) -> None:
+    cursor.execute(
+            """
+            INSERT INTO samples (source, graph_type, questionm, goodd_answer, raw_graph)
+            VALUES (%s, %s, %s, %s, %s);
+            """,
+            (source, str(graph_type), question, answer, str(graph))
+        )
