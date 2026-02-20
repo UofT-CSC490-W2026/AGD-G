@@ -47,19 +47,17 @@ image = (
     )
 )
 
-# Secrets — create these in Modal dashboard or CLI:
-#   modal secret create aws-secret AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... AWS_DEFAULT_REGION=...
-#   modal secret create rds-secret RDS_HOST=... RDS_PORT=... RDS_DB=... RDS_USER=... RDS_PASSWORD=...
-#
-# For local testing without Modal secrets, you can set these as env vars.
+# Secrets — these should already exist in your Modal dashboard:
+#   "aws"     → AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
+#   "aws-rds" → DB_PASSWORD
 
 # ---------------------------------------------------------------------------
 # Configuration — edit these to match your team's setup
 # ---------------------------------------------------------------------------
 
-S3_BUCKET = "adviz-charts"                 # ← your S3 bucket name
-S3_PREFIX = "good_graphs/ChartBench"       # ← key prefix for this dataset
-AWS_REGION = "us-east-1"                   # ← your AWS region
+S3_BUCKET = "agd-dev-tyson"
+S3_PREFIX = "good_graphs/ChartBench"
+AWS_REGION = "ca-central-1"
 
 HF_DATASET_ID = "SincereX/ChartBench"
 HF_SUBSET = "chart_bench"
@@ -106,8 +104,8 @@ def image_path_to_s3_key(image_path: str) -> str:
 @app.function(
     image=image,
     secrets=[
-        modal.Secret.from_name("aws-secret"),
-        modal.Secret.from_name("rds-secret"),
+        modal.Secret.from_name("aws"),
+        modal.Secret.from_name("aws-rds"),
     ],
     timeout=3600,   # 1 hour — plenty for 10.5k rows
     memory=2048,    # 2 GB
@@ -124,21 +122,16 @@ def import_chartbench():
     log = logging.getLogger("import_chartbench")
 
     # ── Connect to AWS S3 ────────────────────────────────────────────────
-    s3 = boto3.client(
-        "s3",
-        region_name=os.environ.get("AWS_DEFAULT_REGION", AWS_REGION),
-        aws_access_key_id=os.environ["AWS_ACCESS_KEY_ID"],
-        aws_secret_access_key=os.environ["AWS_SECRET_ACCESS_KEY"],
-    )
+    s3 = boto3.client("s3", region_name=AWS_REGION)
     log.info(f"Connected to S3 bucket: {S3_BUCKET}")
 
     # ── Connect to RDS (Postgres) ────────────────────────────────────────
     conn = psycopg2.connect(
-        host=os.environ["RDS_HOST"],
-        port=int(os.environ.get("RDS_PORT", "5432")),
-        dbname=os.environ["RDS_DB"],
-        user=os.environ["RDS_USER"],
-        password=os.environ["RDS_PASSWORD"],
+        host="agd-dev-postgres.cdsyi46ammw7.ca-central-1.rds.amazonaws.com",
+        port=5432,
+        database="postgres",
+        user="postgres",
+        password=os.environ["DB_PASSWORD"],
         sslmode="require",
     )
     conn.autocommit = False
@@ -257,11 +250,15 @@ def import_chartbench():
 
 
 # ---------------------------------------------------------------------------
-# Entrypoint — run with: modal run chartbench.py
+# Entrypoint — run with: modal run import_chartbench.py
 # ---------------------------------------------------------------------------
 
 @app.local_entrypoint()
 def main():
     result = import_chartbench.remote()
+    print("\n" + "=" * 60)
+    print("ChartBench Import Summary")
+    print("=" * 60)
     for k, v in result.items():
         print(f"  {k:20s}: {v}")
+    print("=" * 60)

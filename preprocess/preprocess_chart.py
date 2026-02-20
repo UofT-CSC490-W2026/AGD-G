@@ -12,6 +12,16 @@ Preprocessing steps:
   5. Resize to 512×512 with LANCZOS antialiasing
   6. Normalize to consistent white background (replace transparency)
   7. Record original dimensions + preprocessing metadata in RDS
+
+Why each step matters for AGD:
+  - 512×512 RGB is the native input for Stable Diffusion 1.5's VAE encoder
+  - Letterbox padding preserves bar widths, axis proportions, line slopes —
+    stretching would distort these and the adversarial perturbation wouldn't
+    transfer back to the original geometry
+  - Whitespace cropping maximizes the chart's footprint within 512×512,
+    giving the diffusion model more chart signal vs. blank padding
+  - RGB conversion prevents channel mismatch errors in the VAE
+  - Consistent white background avoids artifacts from transparency
 """
 
 import modal
@@ -40,10 +50,10 @@ image = (
 # Configuration
 # ---------------------------------------------------------------------------
 
-S3_BUCKET = "adviz-charts"
-S3_RAW_PREFIX = "good_graphs/ChartBench"        # where importer dumped originals
-S3_PROCESSED_PREFIX = "processed/ChartBench"     # where cleaned images go
-AWS_REGION = "us-east-1"
+S3_BUCKET = "agd-dev-tyson"
+S3_RAW_PREFIX = "good_graphs/ChartBench"
+S3_PROCESSED_PREFIX = "processed/ChartBench"
+AWS_REGION = "ca-central-1"
 
 TARGET_SIZE = 512                  # AGD expects 512×512 (SD 1.5)
 PAD_COLOR = (255, 255, 255)        # white background for letterbox padding
@@ -245,8 +255,8 @@ def raw_key_to_processed_key(raw_key: str) -> str:
 @app.function(
     image=image,
     secrets=[
-        modal.Secret.from_name("aws-secret"),
-        modal.Secret.from_name("rds-secret"),
+        modal.Secret.from_name("aws"),
+        modal.Secret.from_name("aws-rds"),
     ],
     timeout=7200,    # 2 hours — image processing takes longer
     memory=4096,     # 4 GB — numpy arrays for whitespace detection
@@ -261,21 +271,16 @@ def preprocess_all():
     log = logging.getLogger("preprocess_charts")
 
     # ── Connect to S3 ────────────────────────────────────────────────────
-    s3 = boto3.client(
-        "s3",
-        region_name=os.environ.get("AWS_DEFAULT_REGION", AWS_REGION),
-        aws_access_key_id=os.environ["AWS_ACCESS_KEY_ID"],
-        aws_secret_access_key=os.environ["AWS_SECRET_ACCESS_KEY"],
-    )
+    s3 = boto3.client("s3", region_name=AWS_REGION)
     log.info(f"Connected to S3: {S3_BUCKET}")
 
     # ── Connect to RDS ───────────────────────────────────────────────────
     conn = psycopg2.connect(
-        host=os.environ["RDS_HOST"],
-        port=int(os.environ.get("RDS_PORT", "5432")),
-        dbname=os.environ["RDS_DB"],
-        user=os.environ["RDS_USER"],
-        password=os.environ["RDS_PASSWORD"],
+        host="agd-dev-postgres.cdsyi46ammw7.ca-central-1.rds.amazonaws.com",
+        port=5432,
+        database="postgres",
+        user="postgres",
+        password=os.environ["DB_PASSWORD"],
         sslmode="require",
     )
     conn.autocommit = False
@@ -419,5 +424,9 @@ def preprocess_all():
 @app.local_entrypoint()
 def main():
     result = preprocess_all.remote()
+    print("\n" + "=" * 60)
+    print("Chart Preprocessing Summary")
+    print("=" * 60)
     for k, v in result.items():
         print(f"  {k:20s}: {v}")
+    print("=" * 60)
