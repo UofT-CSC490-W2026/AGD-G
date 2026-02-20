@@ -34,7 +34,7 @@ from typing import Optional
 # Modal setup
 # ---------------------------------------------------------------------------
 
-app = modal.App("adviz-preprocess-charts")
+app = modal.App("agd-preprocess-charts")
 
 image = (
     modal.Image.debian_slim(python_version="3.11")
@@ -46,32 +46,27 @@ image = (
     )
 )
 
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
-
+# AWS and HuggingFaceConfiguration
 S3_BUCKET = "agd-dev-tyson"
 S3_RAW_PREFIX = "good_graphs/ChartBench"
 S3_PROCESSED_PREFIX = "processed/ChartBench"
 AWS_REGION = "ca-central-1"
 
-TARGET_SIZE = 512                  # AGD expects 512×512 (SD 1.5)
-PAD_COLOR = (255, 255, 255)        # white background for letterbox padding
-WHITESPACE_CROP_THRESHOLD = 245    # pixels above this brightness = "white"
-WHITESPACE_CROP_MIN_BORDER = 5     # keep at least 5px border after crop
-BATCH_SIZE = 100                   # commit + log every N rows
+# Define preprocessing parameters
+TARGET_SIZE = 512
+PAD_COLOR = (255, 255, 255)
+WHITESPACE_CROP_THRESHOLD = 245
+WHITESPACE_CROP_MIN_BORDER = 5
+BATCH_SIZE = 100
 
-# ---------------------------------------------------------------------------
 # Preprocessing functions
-# ---------------------------------------------------------------------------
-
 
 def validate_image(img_bytes: bytes) -> bool:
     """Check that the image bytes decode without error."""
     from PIL import Image
     try:
         img = Image.open(io.BytesIO(img_bytes))
-        img.verify()  # checks for truncation/corruption
+        img.verify()
         return True
     except Exception:
         return False

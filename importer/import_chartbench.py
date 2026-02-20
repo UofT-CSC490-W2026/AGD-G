@@ -29,11 +29,8 @@ import shutil
 import zipfile
 from pathlib import PurePosixPath
 
-# ---------------------------------------------------------------------------
-# Modal setup
-# ---------------------------------------------------------------------------
-
-app = modal.App("adviz-import-chartbench")
+# Modal Setup
+app = modal.App("import-chartbench")
 
 # Create a container image with all dependencies
 image = (
@@ -47,32 +44,18 @@ image = (
     )
 )
 
-# Secrets — these should already exist in your Modal dashboard:
-#   "aws"     → AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
-#   "aws-rds" → DB_PASSWORD
-
-# ---------------------------------------------------------------------------
-# Configuration — edit these to match your team's setup
-# ---------------------------------------------------------------------------
-
+# AWS and HuggingFace Configuration
 S3_BUCKET = "agd-dev-tyson"
 S3_PREFIX = "good_graphs/ChartBench"
 AWS_REGION = "ca-central-1"
 
 HF_DATASET_ID = "SincereX/ChartBench"
 HF_SUBSET = "chart_bench"
-HF_SPLIT = "test_data"                     # 10.5k rows; change to "train_data" for 266k
+HF_SPLIT = "test_data"
 
-# Zip file containing chart images in the HF repo
-# test_data uses "data/test.zip", train_data uses "data/train.zip"
-HF_IMAGE_ZIP = "data/test.zip"             # ← matches HF_SPLIT
-
-# How many rows to process per batch (for progress logging)
+HF_IMAGE_ZIP = "data/test.zip"
 BATCH_SIZE = 100
 
-# ---------------------------------------------------------------------------
-# Helper: deterministic S3 key from image path
-# ---------------------------------------------------------------------------
 
 def image_path_to_s3_key(image_path: str) -> str:
     """
@@ -85,21 +68,13 @@ def image_path_to_s3_key(image_path: str) -> str:
     We strip the leading "./data/" and trailing "/image.png" to get a clean
     hierarchy, then prepend the S3_PREFIX.
     """
-    # Normalize: "./data/train/area/area/chart_0/image.png"
-    #          → "train/area/area/chart_0/image.png"
     clean = image_path.replace("./data/", "").replace(".\\data\\", "")
 
-    # Drop the "/image.png" suffix — use the parent folder as the chart ID
-    # "train/area/area/chart_0/image.png" → "train/area/area/chart_0"
     p = PurePosixPath(clean)
-    chart_id = str(p.parent)  # "train/area/area/chart_0"
+    chart_id = str(p.parent)
 
     return f"{S3_PREFIX}/{chart_id}.png"
 
-
-# ---------------------------------------------------------------------------
-# Core import logic (runs inside Modal container)
-# ---------------------------------------------------------------------------
 
 @app.function(
     image=image,
@@ -107,9 +82,11 @@ def image_path_to_s3_key(image_path: str) -> str:
         modal.Secret.from_name("aws"),
         modal.Secret.from_name("aws-rds"),
     ],
-    timeout=3600,   # 1 hour — plenty for 10.5k rows
-    memory=2048,    # 2 GB
+    timeout=3600,
+    memory=2048,
 )
+
+
 def import_chartbench():
     """Main import function: HuggingFace → S3 + RDS."""
     import os
@@ -121,11 +98,11 @@ def import_chartbench():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     log = logging.getLogger("import_chartbench")
 
-    # ── Connect to AWS S3 ────────────────────────────────────────────────
+    # Connect to AWS S3
     s3 = boto3.client("s3", region_name=AWS_REGION)
     log.info(f"Connected to S3 bucket: {S3_BUCKET}")
 
-    # ── Connect to RDS (Postgres) ────────────────────────────────────────
+    # Connect to RDS PostgreSQL
     conn = psycopg2.connect(
         host="agd-dev-postgres.cdsyi46ammw7.ca-central-1.rds.amazonaws.com",
         port=5432,
@@ -138,7 +115,7 @@ def import_chartbench():
     cur = conn.cursor()
     log.info("Connected to RDS")
 
-    # ── Ensure table exists ──────────────────────────────────────────────
+    # Ensure table exists
     cur.execute("""
         CREATE TABLE IF NOT EXISTS samples (
             id                SERIAL PRIMARY KEY,
@@ -157,7 +134,7 @@ def import_chartbench():
     conn.commit()
     log.info("Table 'samples' ready")
 
-    # ── Download and extract image zip from HuggingFace ──────────────────
+    # Download and extract image zip from HuggingFace
     log.info(f"Downloading {HF_IMAGE_ZIP} from {HF_DATASET_ID} ...")
     zip_path = hf_hub_download(
         repo_id=HF_DATASET_ID,
@@ -171,18 +148,18 @@ def import_chartbench():
         zf.extractall(extract_dir)
     log.info(f"Extracted to {extract_dir}")
 
-    # ── Load dataset from HuggingFace ────────────────────────────────────
+    # Load dataset from HuggingFace
     log.info(f"Loading {HF_DATASET_ID} split={HF_SPLIT} ...")
     ds = load_dataset(HF_DATASET_ID, HF_SUBSET, split=HF_SPLIT)
     total = len(ds)
     log.info(f"Loaded {total} rows")
 
-    # ── Process rows: read local image → upload to S3 → insert RDS ──────
+
     INSERT_SQL = """
         INSERT INTO samples (source, graph_type, question, good_graph, good_answer)
         VALUES (%s, %s, %s, %s, %s)
     """
-    uploaded: set[str] = set()   # S3 keys already uploaded (dedup)
+    uploaded: set[str] = set()
     inserted = 0
     skipped = 0
 
@@ -190,9 +167,7 @@ def import_chartbench():
         img_path = row["image"]
         s3_key = image_path_to_s3_key(img_path)
 
-        # ── Upload image to S3 (once per unique image) ───────────────
         if s3_key not in uploaded:
-            # Resolve local path: "./data/test/area/..." → extracted dir
             relative_img_path = img_path.replace("./data/", "")
             local_src = os.path.join(extract_dir, relative_img_path)
 
@@ -210,18 +185,17 @@ def import_chartbench():
                 )
             uploaded.add(s3_key)
 
-        # ── Insert QA row into RDS ───────────────────────────────────
         s3_uri = f"s3://{S3_BUCKET}/{s3_key}"
         chart_type = row["type"]["chart"]
         question = row["conversation"][0]["query"]
         answer = row["conversation"][0]["label"]
 
         cur.execute(INSERT_SQL, (
-            "ChartBench",   # source
-            chart_type,     # graph_type
-            question,       # question
-            s3_uri,         # good_graph (S3 path)
-            answer,         # good_answer
+            "ChartBench",
+            chart_type,
+            question,
+            s3_uri,
+            answer,
         ))
         inserted += 1
 
@@ -236,7 +210,7 @@ def import_chartbench():
     log.info(f"Import complete: {inserted} inserted, {skipped} skipped, "
              f"{len(uploaded)} unique images")
 
-    # ── Cleanup ──────────────────────────────────────────────────────────
+    # Cleanup
     cur.close()
     conn.close()
     shutil.rmtree(extract_dir, ignore_errors=True)
@@ -248,17 +222,10 @@ def import_chartbench():
         "rows_skipped": skipped,
     }
 
-
-# ---------------------------------------------------------------------------
-# Entrypoint — run with: modal run import_chartbench.py
-# ---------------------------------------------------------------------------
+# Entrypoint
 
 @app.local_entrypoint()
 def main():
     result = import_chartbench.remote()
-    print("\n" + "=" * 60)
-    print("ChartBench Import Summary")
-    print("=" * 60)
     for k, v in result.items():
         print(f"  {k:20s}: {v}")
-    print("=" * 60)
