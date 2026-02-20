@@ -1,3 +1,9 @@
+# python import is executed before modal ships the code
+# the local file config is in the parent directory thus missing
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 import modal
 from typing import Optional
 
@@ -12,8 +18,8 @@ image = (
         "Pillow",
         "numpy",
     )
-    .add_local_file("aws.py", "/root/aws.py")
-    .add_local_file("config.py", "/root/config.py")
+    .add_local_file("../aws.py", "/root/aws.py")
+    .add_local_file("../config.py", "/root/config.py")
 )
 
 # Configuration

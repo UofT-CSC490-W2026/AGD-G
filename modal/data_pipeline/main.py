@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
-"""""
-A script to run imports to all datasets and preprocess the data
-"""""
-
+"""
+Run all dataset imports and preprocessing.
+"""
 import argparse
 import subprocess
 import sys
@@ -45,31 +44,38 @@ def main():
 
     results = {}
 
-    # Imports
-    if not args.skip_import:
-        for i, (name, script) in enumerate(IMPORTERS):
-            cmd = ["modal", "run", script, "--"]
+    # ── Clean (must finish before imports) ──────────────────────────
+    if not args.skip_import and args.clean:
+        ok = run(["modal", "run", "clean.py"], "Clean S3 + RDS")
+        results["clean"] = ok
+        if not ok:
+            print("Clean failed — aborting")
+            sys.exit(1)
 
+    # ── Imports (parallel) ────────────────────────────────────────────
+    if not args.skip_import:
+        procs = {}
+        for name, script in IMPORTERS:
+            cmd = ["modal", "run", script, "--"]
             if args.limit is not None:
                 cmd += ["-l", str(args.limit)]
 
-            # Only clean on the first importer
-            # not to erase data between importers
-            if args.clean and i == 0:
-                cmd += ["-c"]
+            print(f"\n  Starting {name}...")
+            procs[name] = (subprocess.Popen(cmd), time.time())
 
-            ok = run(cmd, f"Import {name}")
+        for name, (proc, start) in procs.items():
+            proc.wait()
+            elapsed = time.time() - start
+            ok = proc.returncode == 0
             results[name] = ok
-
-            if not ok:
-                print(f"Import {name} failed — continuing with next dataset")
+            print(f"  {'Passed' if ok else 'Failed'} {name} ({elapsed:.1f}s)")
 
     # Preprocess
     if not args.skip_preprocess:
         ok = run(["modal", "run", PREPROCESSOR], "Preprocess all")
         results["preprocess"] = ok
 
-    # Summary for debug
+    # Summary
     print("  Summary")
     for name, ok in results.items():
         print(f"  {'Passed' if ok else 'Failed'} {name}")
