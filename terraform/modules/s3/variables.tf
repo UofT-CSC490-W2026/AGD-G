@@ -1,8 +1,7 @@
-resource "aws_s3_bucket" "data_lake" {
-  bucket = var.bucket_name
+variable "bucket_name" {
+  type = string
+}
 
-  tags = {
-    Project     = "agd"
-    Environment = var.environment
-  }
+variable "environment" {
+  type = string
 }

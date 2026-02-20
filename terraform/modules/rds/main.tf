@@ -1,16 +1,18 @@
-variable "environment" {
-  type = string
-}
+resource "aws_db_instance" "postgres" {
+  identifier = "agd-${var.environment}-postgres"
 
-variable "db_username" {
-  type = string
-}
+  engine         = "postgres"
+  engine_version = "15"
+  instance_class = "db.t3.micro"
 
-variable "db_password" {
-  type      = string
-  sensitive = true
-}
+  allocated_storage = 20
 
-variable "security_group_id" {
-  type = string
+  username = var.db_username
+  password = var.db_password
+
+  publicly_accessible    = true
+  vpc_security_group_ids = [var.security_group_id]
+
+  skip_final_snapshot = true
+  deletion_protection = false
 }
