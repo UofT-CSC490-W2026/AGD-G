@@ -139,7 +139,7 @@ def add_sample_row(
         graph: UUID) -> None:
     cursor.execute(
             """
-            INSERT INTO samples (source, graph_type, questionm, goodd_answer, raw_graph)
+            INSERT INTO samples (source, graph_type, question, good_answer, raw_graph)
             VALUES (%s, %s, %s, %s, %s);
             """,
             (source, str(graph_type), question, answer, str(graph))
