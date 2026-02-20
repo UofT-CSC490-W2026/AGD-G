@@ -26,7 +26,7 @@ Production environment (`terraform/environments/prod`) is current unused
 1. Create a Modal account, create a workspace, or join someone else's
 2. Install Modal CLI
 3. `modal setup`
-4. Create secrets to grant Modal AWS access:
+4. Create secrets to grant Modal access to AWS and HuggingFace:
 ```
 modal secret create aws \
   AWS_ACCESS_KEY_ID=... \
@@ -35,6 +35,9 @@ modal secret create aws \
 
 modal secret create aws-rds \
   DB_PASSWORD=...
+
+modal secret create huggingface \
+  HF_TOKEN=...
 ```
 
 ## Modal usage
@@ -44,7 +47,7 @@ modal secret create aws-rds \
 Import Modal and any AWS utility functions you need:
 ```
 import modal
-from aws import get_db_connection, get_object, put_object
+from aws import get_db_connection, get_image, put_image
 ```
 
 Define an image by chaining methods, using
@@ -112,3 +115,10 @@ def main():
 Now, just run your app with `modal run do_stuff.py`. Execution will start at the entrypoint.
 All `@app.function()` functions will be run on Modal servers and all CLI output will appear
 in your terminal. If you cancel the process with `Control-C`, it will stop on the Modal server too.
+
+## Command-line access to RDS
+
+Install `postgresql`, replace `...` with the database password, and access the database locally:
+```
+PGPASSWORD='...' psql -h agd-dev-postgres.cdsyi46ammw7.ca-central-1.rds.amazonaws.com -U postgres -d postgres -p 5432
+```

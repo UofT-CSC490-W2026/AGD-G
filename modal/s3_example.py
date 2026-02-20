@@ -1,7 +1,8 @@
 import modal
 import random
 import string
-from aws import get_object, put_object, BUCKET
+from uuid import UUID
+from aws import get_image, put_image
 
 
 aws_image = (
@@ -19,25 +20,25 @@ app = modal.App(
     )
 
 
-def random_string(length: int) -> str:
+def random_bytes(length: int) -> str:
     return ''.join(random.choices(string.ascii_letters, k=length))
 
 
 @app.function()
-def upload(key: str, body: str) -> None:
-    put_object(key, body)
-    print(f'Stored    "{body}" at   s3://{BUCKET}/{key}')
+def upload(body: str) -> UUID:
+    key = put_image(body.encode('utf-8'))
+    print(f'Stored    "{body}" at   {str(key)}')
+    return key
 
 
 @app.function()
-def download(key: str) -> None:
-    body = get_object(key).decode("utf-8")
-    print(f'Retrieved "{body}" from s3://{BUCKET}/{key}')
+def download(key: UUID) -> None:
+    body = get_image(key).decode("utf-8")
+    print(f'Retrieved "{body}" from {str(key)}')
 
 
 @app.local_entrypoint()
 def main():
-    key = random_string(12)
-    body = ' '.join(random_string(5) for _ in range(3))
-    upload.remote(key, body)
+    body = random_bytes(20)
+    key = upload.remote(body)
     download.remote(key)
