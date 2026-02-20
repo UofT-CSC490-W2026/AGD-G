@@ -3,30 +3,39 @@ ChartQAx data pipeline: loads ChartQA-X from Hugging Face, processes chart image
 and QA pairs, and (TODO) writes metadata to RDS and images to S3.
 """
 import modal
+import os
+import aws
+from aws import GraphType
 
-app = modal.App("data-pipeline")
-
-dataPipelineImage = (
+data_pipeline_image = (
     modal.Image.debian_slim(python_version="3.13.5")
     .uv_pip_install(
         "datasets==4.5.0",
         "huggingface_hub==1.4.1",
-        "pillow==12.1.1"
+        "datasets==4.5.0",
+        "pillow==12.1.1",
+        "boto3",
+        "psycopg2-binary"
     )
+    .add_local_file("aws.py", "/root/aws.py")
 )
 
-@app.function(
-    image=dataPipelineImage, 
-    secrets=[modal.Secret.from_name("huggingface-secret")]
-)
-def main():
+app = modal.App(
+        "data-pipeline",
+        image=data_pipeline_image,
+        secrets=[
+            modal.Secret.from_name("aws"),
+            modal.Secret.from_name("aws-rds"),
+            modal.Secret.from_name("huggingface"),
+        ],
+    )
+
+@app.function()
+def main(import_limit : int | None = 20):
     """Load ChartQA-X dataset, extract chart images and QA pairs, and process each row."""
     from datasets import load_dataset
-    from PIL import Image
     from huggingface_hub import hf_hub_download
-    from io import BytesIO
     import zipfile
-    import os
 
     # Load ChartQA-X dataset metadata (splits and row references)
     repo_id = "shamanthakhegde/ChartQA-X"
@@ -48,12 +57,18 @@ def main():
         with zipfile.ZipFile(zip_path, "r") as z:
             z.extractall(extract_path)
 
+    with aws.get_db_connection() as conn:
+        with conn.cursor() as cursor:
+            import_dataset(ds, cursor, extract_path, zip_root, import_limit)
+
+def import_dataset(ds, cursor, extract_path, zip_root, import_limit : int | None) -> None:
+    import re
+
+    num_imported = 0
     for split_name, split in ds.items():
         printed_schema_preview = False
         for row in split:
-            chart_type = row.get("chart_type", row.get("type", "unknown"))
-            if chart_type == "unknown":
-                chart_type = row.get("chart_id", "unknown")
+            graph_type = row.get("chart_type") or row.get("type") or row.get("chart_id", "unknown")
 
             qa_pair = row.get("QA", {})
             question = qa_pair.get("input", "")
@@ -91,39 +106,67 @@ def main():
                         print(f"[schema preview] {candidate}={row[candidate]}")
                 printed_schema_preview = True
 
-            # Preferred: direct image column from HF dataset.
-            image = row.get("image") or row.get("image_path")
-            if isinstance(image, dict):
-                # datasets Image feature may provide {"bytes": ..., "path": ...}
-                if image.get("bytes"):
-                    image = Image.open(BytesIO(image["bytes"]))
-                elif image.get("path"):
-                    image = Image.open(image["path"])
-            elif isinstance(image, str):
-                maybe_local_path = image.lstrip("./")
-                fallback_path = os.path.join(extract_path, zip_root, maybe_local_path)
-                if os.path.exists(maybe_local_path):
-                    image = Image.open(maybe_local_path)
-                elif os.path.exists(fallback_path):
-                    image = Image.open(fallback_path)
-                else:
-                    image = None
-
-            if image is None:
-                image_path = str(
-                    row.get("img")
-                    or row.get("imgname")
-                    or row.get("image_name")
-                    or row.get("file_name")
-                    or row.get("filename")
-                    or ""
-                ).lstrip("./")
-                final_image_path = os.path.join(extract_path, zip_root, image_path)
-                if not image_path or not os.path.exists(final_image_path):
-                    print(f"Skipping row with missing image: {image_path}")
-                    continue
-                image = Image.open(final_image_path)
-
+            try:
+                image = get_image(row, extract_path, zip_root)
+            except ValueError as e:
+                print(f"Skipping row: {str(e)}")
+                continue
             image = image.convert("RGB")
+            image_bytes = image_to_bytes(image)
+            graph_type = re.sub(r'_[0-9]+', '', graph_type)
+            graph_type = map_graph_type(graph_type)
 
-            print(image, chart_type, question, answer)
+            print(type(image_bytes), len(image_bytes), graph_type, question, answer)
+            image_key = aws.put_image(image_bytes)
+            aws.add_sample_row(cursor, "ChartQA-X", graph_type, question, answer, image_key)
+
+            num_imported += 1
+            if import_limit is not None and num_imported > import_limit:
+                return
+
+def get_image(row, extract_path, zip_root) -> bytes:
+    from PIL import Image
+    from io import BytesIO
+    # Preferred: direct image column from HF dataset.
+    image = row.get("image") or row.get("image_path")
+    if isinstance(image, dict):
+        # datasets Image feature may provide {"bytes": ..., "path": ...}
+        if image.get("bytes"):
+            return Image.open(BytesIO(image["bytes"]))
+        elif image.get("path"):
+            return Image.open(image["path"])
+    if isinstance(image, str):
+        maybe_local_path = image.lstrip("./")
+        fallback_path = os.path.join(extract_path, zip_root, maybe_local_path)
+        if os.path.exists(maybe_local_path):
+            return Image.open(maybe_local_path)
+        elif os.path.exists(fallback_path):
+            return Image.open(fallback_path)
+    if image is not None:
+        return image
+
+    image_path = str(
+        row.get("img")
+        or row.get("imgname")
+        or row.get("image_name")
+        or row.get("file_name")
+        or row.get("filename")
+        or ""
+    ).lstrip("./")
+    final_image_path = os.path.join(extract_path, zip_root, image_path)
+    if not image_path or not os.path.exists(final_image_path):
+        raise ValueError(f"Row missing image: {image_path}")
+    return Image.open(final_image_path)
+
+def image_to_bytes(image) -> bytes:
+    from io import BytesIO
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+def map_graph_type(graph_type: str) -> GraphType:
+    mapping = {
+        "two_col": GraphType.BAR,
+        "multi_col": GraphType.BAR,
+    }
+    return mapping.get(graph_type, GraphType.OTHER)

@@ -8,7 +8,8 @@ from enum import Enum
 
 BUCKET='agd-dev-tyson'
 RDS_HOST='agd-dev-postgres.cdsyi46ammw7.ca-central-1.rds.amazonaws.com'
-IMAGE_PREFIX='samples'
+IMAGE_PREFIX='samples/'
+IMAGE_POSTFIX='.png'
 
 class GraphType(Enum):
     THREE_D = 1
@@ -69,7 +70,7 @@ def put_image(image: bytes) -> UUID:
     s3 = boto3.client("s3")
     s3.put_object(
         Bucket=BUCKET,
-        Key=IMAGE_PREFIX + '/' + str(key),
+        Key=IMAGE_PREFIX + str(key) + IMAGE_POSTFIX,
         Body=image
     )
     return key
@@ -84,7 +85,7 @@ def get_image(key: UUID | str) -> bytes:
     try:
         response = s3.get_object(
             Bucket=BUCKET,
-            Key=IMAGE_PREFIX + '/' + str(key)
+            Key=IMAGE_PREFIX + str(key) + IMAGE_POSTFIX,
         )
     except ClientError as e:
         if e.response["Error"]["Code"] == "NoSuchKey":
@@ -117,8 +118,8 @@ def create_schema_if_not_exists() -> None:
                     question          TEXT NOT NULL,
                     good_answer       TEXT NOT NULL,
                     raw_graph         UUID NOT NULL,
-                    original_width    INTEGER NOT NULL,
-                    original_height   INTEGER NOT NULL,
+                    original_width    INTEGER,
+                    original_height   INTEGER,
                     preprocess_meta   JSONB,
                     good_graph        UUID,
                     hidden_graph      UUID,
@@ -139,7 +140,7 @@ def add_sample_row(
         graph: UUID) -> None:
     cursor.execute(
             """
-            INSERT INTO samples (source, graph_type, questionm, goodd_answer, raw_graph)
+            INSERT INTO samples (source, graph_type, question, good_answer, raw_graph)
             VALUES (%s, %s, %s, %s, %s);
             """,
             (source, str(graph_type), question, answer, str(graph))
