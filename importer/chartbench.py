@@ -257,15 +257,11 @@ def import_chartbench():
 
 
 # ---------------------------------------------------------------------------
-# Entrypoint — run with: modal run import_chartbench.py
+# Entrypoint — run with: modal run chartbench.py
 # ---------------------------------------------------------------------------
 
 @app.local_entrypoint()
 def main():
     result = import_chartbench.remote()
-    print("\n" + "=" * 60)
-    print("ChartBench Import Summary")
-    print("=" * 60)
     for k, v in result.items():
         print(f"  {k:20s}: {v}")
-    print("=" * 60)
