@@ -19,11 +19,41 @@ dataPipelineImage = (
     .add_local_file("aws.py", "/root/aws.py")
 )
 
+from aws import GraphType
+
+# ChartX dataset chart_type string -> GraphType (multiple chart types map to one GraphType)
+CHART_TYPE_TO_GRAPH_TYPE = {
+    "3D-Bar": GraphType.THREE_D,
+    "bar_chart_num": GraphType.BAR,
+    "bar_chart": GraphType.BAR,
+    "histogram": GraphType.BAR,
+    "candlestick": GraphType.CANDLE,
+    "multi-axes": GraphType.OTHER,
+    "rings": GraphType.PIE,
+    "area_chart": GraphType.AREA,
+    "box": GraphType.BOX,
+    "funnel": GraphType.BAR,
+    "line_chart": GraphType.LINE,
+    "line_chart_num": GraphType.LINE,
+    "pie_chart": GraphType.PIE,
+    "rose": GraphType.RADAR,
+    "bubble": GraphType.SCATTER,
+    "heatmap": GraphType.HEATMAP,
+    "radar": GraphType.RADAR,
+    "treemap": GraphType.TREEMAP,
+}
+
+
+def chart_type_to_graph_type(chart_type: str) -> GraphType:
+    """Map a ChartX chart_type string to GraphType. Returns OTHER for unknown types."""
+    return CHART_TYPE_TO_GRAPH_TYPE.get(chart_type, GraphType.OTHER)
+
+
 @app.function(
     image=dataPipelineImage, 
     secrets=[
         modal.Secret.from_name("huggingface-secret"),
-        modal.Secret.from_name("aws"),
+        modal.Secret.from_name("aws-secret"),
         modal.Secret.from_name("aws-rds"),
     ]
 )
@@ -58,11 +88,12 @@ def main():
 
         MAX_FAILURES = 50
         failures = 0
+        processed = 0
 
         with conn.cursor() as cursor:
 
-            for split in ds:        
-                for row in range(5):
+            for split_name in ds:
+                for row in ds[split_name]:
                     if failures >= MAX_FAILURES:
                         break
                     try:
@@ -82,19 +113,29 @@ def main():
                         image.save(image_bytes, format='PNG')
                         uuid = put_image(image_bytes.getvalue())
 
+                        graph_type = chart_type_to_graph_type(chart_type)
+
                         cursor.execute(
                             """
                             INSERT INTO samples (source, graph_type, question, good_answer, raw_graph)
                             VALUES (%s, %s, %s, %s, %s);
                             """,
-                            (CHARTX_SOURCE, chart_type, question, answer, uuid),
+                            (CHARTX_SOURCE, str(graph_type), question, answer, str(uuid)),
                         )
                         conn.commit()
-                    except Exception:
+                        processed += 1
+                    except Exception as e:
                         failures += 1
+                        import traceback
+                        
+                        print(f"Row failed (failure {failures}/{MAX_FAILURES}): {e!r}")
+                        traceback.print_exc()
                         if failures >= MAX_FAILURES:
                             break
                         continue
 
             if failures >= MAX_FAILURES:
                 raise RuntimeError(f"Stopping after {MAX_FAILURES} failures.")
+
+
+    print(f"Processed {processed} rows.")
