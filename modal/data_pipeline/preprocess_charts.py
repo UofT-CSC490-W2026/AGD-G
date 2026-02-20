@@ -1,10 +1,5 @@
 import modal
-import io
-import json
-import logging
 from typing import Optional
-
-from aws import get_db_connection, get_image, put_image
 
 # Modal setup
 app = modal.App("agd-preprocess-charts")
@@ -18,6 +13,7 @@ image = (
         "numpy",
     )
     .add_local_file("aws.py", "/root/aws.py")
+    .add_local_file("config.py", "/root/config.py")
 )
 
 # Configuration
@@ -32,6 +28,8 @@ BATCH_SIZE = 100
 # Preprocessing functions
 def validate_image(img_bytes: bytes) -> bool:
     from PIL import Image
+    import io
+
     try:
         img = Image.open(io.BytesIO(img_bytes))
         img.verify()
@@ -102,6 +100,7 @@ def letterbox_resize(img, target_size: int = TARGET_SIZE):
 
 def preprocess_single(img_bytes: bytes) -> Optional[dict]:
     from PIL import Image
+    import io
 
     if not validate_image(img_bytes):
         return None
@@ -145,11 +144,15 @@ def preprocess_single(img_bytes: bytes) -> Optional[dict]:
     memory=4096,
 )
 def preprocess_all():
+    import aws
+    import json
+    import logging
+
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     log = logging.getLogger("preprocess_charts")
 
     # Get unique raw images needing processing (any dataset)
-    with get_db_connection() as conn:
+    with aws.get_db_connection() as conn:
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT DISTINCT raw_graph
@@ -169,12 +172,12 @@ def preprocess_all():
     skipped_count = 0
     rows_updated = 0
 
-    with get_db_connection() as conn:
+    with aws.get_db_connection() as conn:
         with conn.cursor() as cur:
             for raw_uuid in raw_uuids:
                 # Download via get_image
                 try:
-                    raw_bytes = get_image(raw_uuid)
+                    raw_bytes = aws.get_image(raw_uuid)
                 except KeyError:
                     log.warning(f"  Not found in S3: {raw_uuid}")
                     skipped_count += 1
@@ -188,7 +191,7 @@ def preprocess_all():
                     continue
 
                 # Upload processed image → new UUID
-                processed_uuid = put_image(result["image_bytes"])
+                processed_uuid = aws.put_image(result["image_bytes"])
 
                 # Update all rows sharing this raw_graph
                 meta_json = json.dumps(result["meta"])

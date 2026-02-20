@@ -1,11 +1,5 @@
 import modal
-import os
-import logging
-import shutil
-import zipfile
-
-import aws
-from aws import GraphType
+from config import GraphType
 
 # Modal setup
 image = (
@@ -18,6 +12,7 @@ image = (
         "Pillow",
     )
     .add_local_file("aws.py", "/root/aws.py")
+    .add_local_file("config.py", "/root/config.py")
 )
 
 app = modal.App(
@@ -61,6 +56,12 @@ CHARTBENCH_TYPE_MAP: dict[str, GraphType] = {
 def import_chartbench(max_rows: int = 0, clean: bool = False):
     from datasets import load_dataset
     from huggingface_hub import hf_hub_download
+    import aws
+    import os
+    import logging
+    import shutil
+    import zipfile
+
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     log = logging.getLogger("import_chartbench")
@@ -135,7 +136,7 @@ def import_chartbench(max_rows: int = 0, clean: bool = False):
                 # Insert QA row
                 image_uuid_str = uploaded[img_path]
 
-                aws.add_sample_row(
+                aws.add_sample(
                         cursor,
                         "ChartBench",
                         str(graph_type),

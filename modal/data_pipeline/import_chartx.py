@@ -3,8 +3,7 @@ ChartX data pipeline: loads the ChartX dataset from Hugging Face, processes char
 and QA pairs, and (TODO) writes metadata to RDS and images to S3.
 """
 import modal
-
-app = modal.App("data-pipeline")
+from config import GraphType
 
 # Container image with Python 3.13 and dependencies for dataset loading and image handling
 dataPipelineImage = (
@@ -17,9 +16,19 @@ dataPipelineImage = (
         "psycopg2-binary"
     )
     .add_local_file("aws.py", "/root/aws.py")
+    .add_local_file("config.py", "/root/config.py")
 )
 
-from aws import GraphType
+# Modal application config
+app = modal.App(
+    "data-pipeline",
+    image=dataPipelineImage,
+    secrets=[
+        modal.Secret.from_name("aws"),
+        modal.Secret.from_name("aws-rds"),
+        modal.Secret.from_name("huggingface"),
+    ],
+)
 
 # ChartX dataset chart_type string -> GraphType (multiple chart types map to one GraphType)
 CHART_TYPE_TO_GRAPH_TYPE = {
@@ -50,24 +59,22 @@ def chart_type_to_graph_type(chart_type: str) -> GraphType:
 
 
 @app.function(
-    image=dataPipelineImage, 
-    secrets=[
-        modal.Secret.from_name("huggingface-secret"),
-        modal.Secret.from_name("aws-secret"),
-        modal.Secret.from_name("aws-rds"),
-    ]
+    timeout=3600,
+    memory=4096,
 )
-def main():
+def main(max_rows : int | None = None):
     """Load ChartX dataset, extract chart images and QA pairs, and process each row."""
     from datasets import load_dataset
     from PIL import Image
     from huggingface_hub import hf_hub_download
-    from aws import put_image, get_db_connection
     import zipfile
     import os
     import io
+    import aws
 
     CHARTX_SOURCE = "ChartX"
+
+    aws.create_table_if_not_exists()
 
     # Load ChartX dataset metadata (splits and row references)
     ds = load_dataset("InternScience/ChartX")
@@ -79,8 +86,7 @@ def main():
         repo_type="dataset",
     )
 
-    with get_db_connection() as conn:
-
+    with aws.get_db_connection() as conn:
         extract_path = "/tmp"
         os.makedirs(extract_path, exist_ok=True)
         with zipfile.ZipFile(zip_path, "r") as z:
@@ -111,31 +117,47 @@ def main():
                         # Convert PIL Image to bytes for S3 upload
                         image_bytes = io.BytesIO()
                         image.save(image_bytes, format='PNG')
-                        uuid = put_image(image_bytes.getvalue())
+                        image_bytes = image_bytes.getvalue()
+                        uuid = aws.put_image(image_bytes)
 
                         graph_type = chart_type_to_graph_type(chart_type)
 
-                        cursor.execute(
-                            """
-                            INSERT INTO samples (source, graph_type, question, good_answer, raw_graph)
-                            VALUES (%s, %s, %s, %s, %s);
-                            """,
-                            (CHARTX_SOURCE, str(graph_type), question, answer, str(uuid)),
-                        )
+                        print(f'[SAMPLE {processed+1}] {graph_type} GRAPH ({len(image_bytes)} bytes): "{question}" "{answer}"')
+
+                        aws.add_sample(
+                                cursor,
+                                CHARTX_SOURCE,
+                                str(graph_type),
+                                question,
+                                answer,
+                                str(uuid)
+                            )
                         conn.commit()
                         processed += 1
                     except Exception as e:
                         failures += 1
                         import traceback
-                        
+
                         print(f"Row failed (failure {failures}/{MAX_FAILURES}): {e!r}")
                         traceback.print_exc()
                         if failures >= MAX_FAILURES:
                             break
                         continue
 
+                    if max_rows is not None and processed >= max_rows:
+                        print(f"Processed {processed} rows.")
+                        return
+
             if failures >= MAX_FAILURES:
                 raise RuntimeError(f"Stopping after {MAX_FAILURES} failures.")
 
 
     print(f"Processed {processed} rows.")
+
+@app.local_entrypoint()
+def local_entrypoint(*arglist):
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-l", "--limit", type=int, default=None, help="Maximum number of samples to import")
+    args = parser.parse_args(args=arglist)
+    main.remote(max_rows=args.limit)

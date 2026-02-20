@@ -3,9 +3,7 @@ ChartQAx data pipeline: loads ChartQA-X from Hugging Face, processes chart image
 and QA pairs, and (TODO) writes metadata to RDS and images to S3.
 """
 import modal
-import os
-import aws
-from aws import GraphType
+from config import GraphType
 
 data_pipeline_image = (
     modal.Image.debian_slim(python_version="3.13.5")
@@ -18,6 +16,7 @@ data_pipeline_image = (
         "psycopg2-binary"
     )
     .add_local_file("aws.py", "/root/aws.py")
+    .add_local_file("config.py", "/root/config.py")
 )
 
 app = modal.App(
@@ -39,6 +38,8 @@ def main(max_rows : int | None = None):
     from datasets import load_dataset
     from huggingface_hub import hf_hub_download
     import zipfile
+    import aws
+    import os
 
     aws.create_table_if_not_exists()
 
@@ -66,8 +67,9 @@ def main(max_rows : int | None = None):
         with conn.cursor() as cursor:
             import_dataset(ds, cursor, extract_path, zip_root, max_rows)
 
-def import_dataset(ds, cursor, extract_path, zip_root, import_limit : int | None) -> None:
+def import_dataset(ds, cursor, extract_path, zip_root, max_rows : int | None) -> None:
     import re
+    import aws
 
     num_imported = 0
     for split_name, split in ds.items():
@@ -123,15 +125,16 @@ def import_dataset(ds, cursor, extract_path, zip_root, import_limit : int | None
 
             print(f'[SAMPLE {num_imported+1}] {graph_type} GRAPH ({len(image_bytes)} bytes): "{question}" "{answer}"')
             image_key = aws.put_image(image_bytes)
-            aws.add_sample_row(cursor, "ChartQA-X", graph_type, question, answer, image_key)
+            aws.add_sample(cursor, "ChartQA-X", graph_type, question, answer, image_key)
 
             num_imported += 1
-            if import_limit is not None and num_imported >= import_limit:
+            if max_rows is not None and num_imported >= max_rows:
                 return
 
 def get_image(row, extract_path, zip_root) -> bytes:
     from PIL import Image
     from io import BytesIO
+    import os
     # Preferred: direct image column from HF dataset.
     image = row.get("image") or row.get("image_path")
     if isinstance(image, dict):
@@ -182,4 +185,4 @@ def local_entrypoint(*arglist):
     parser = argparse.ArgumentParser()
     parser.add_argument("-l", "--limit", type=int, default=None, help="Maximum number of samples to import")
     args = parser.parse_args(args=arglist)
-    main.remote(max_args=args.limit)
+    main.remote(max_rows=args.limit)
