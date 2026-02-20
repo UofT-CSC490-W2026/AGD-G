@@ -116,12 +116,12 @@ def import_dataset(ds, cursor, extract_path, zip_root, import_limit : int | None
             graph_type = re.sub(r'_[0-9]+', '', graph_type)
             graph_type = map_graph_type(graph_type)
 
-            print(type(image_bytes), len(image_bytes), graph_type, question, answer)
+            print(f'[SAMPLE {num_imported+1}] {graph_type} GRAPH ({len(image_bytes)} bytes): "{question}" "{answer}"')
             image_key = aws.put_image(image_bytes)
             aws.add_sample_row(cursor, "ChartQA-X", graph_type, question, answer, image_key)
 
             num_imported += 1
-            if import_limit is not None and num_imported > import_limit:
+            if import_limit is not None and num_imported >= import_limit:
                 return
 
 def get_image(row, extract_path, zip_root) -> bytes:
@@ -170,3 +170,11 @@ def map_graph_type(graph_type: str) -> GraphType:
         "multi_col": GraphType.BAR,
     }
     return mapping.get(graph_type, GraphType.OTHER)
+
+@app.local_entrypoint()
+def local_entrypoint(*arglist):
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-l", "--limit", type=int, default=None, help="Maximum number of samples to import")
+    args = parser.parse_args(args=arglist)
+    main.remote(import_limit=args.limit)
