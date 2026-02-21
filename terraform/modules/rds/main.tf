@@ -30,9 +30,12 @@ resource "postgresql_role" "modal_user" {
   roles = ["rds_iam"]
 }
 
-resource "postgresql_schema" "public" {
-  name  = "public"
-  owner = postgresql_role.modal_user.name
+resource "postgresql_grant" "modal_public_schema_usage" {
+  database  = "postgres"
+  role = postgresql_role.modal_user.name
+  schema = "public"
+  object_type = "schema"
+  privileges  = ["USAGE", "CREATE"]
 
   depends_on = [
     postgresql_role.modal_user
