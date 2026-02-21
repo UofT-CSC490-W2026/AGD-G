@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# TODO: integrate agd attack and evaluation once implemented
 """
 Run all dataset imports and preprocessing.
 """
