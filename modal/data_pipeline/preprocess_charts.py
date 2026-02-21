@@ -144,7 +144,6 @@ def preprocess_single(img_bytes: bytes) -> Optional[dict]:
     image=image,
     secrets=[
         modal.Secret.from_name("aws"),
-        modal.Secret.from_name("aws-rds"),
     ],
     timeout=7200,
     memory=4096,

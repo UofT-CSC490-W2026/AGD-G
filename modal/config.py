@@ -1,7 +1,10 @@
 from enum import Enum
 
 BUCKET='agd-dev-tyson'
+AWS_REGION='ca-central-1'
 RDS_HOST='agd-dev-postgres.cdsyi46ammw7.ca-central-1.rds.amazonaws.com'
+RDS_PORT=5432
+RDS_USER='modal_user'
 IMAGE_PREFIX='samples/'
 IMAGE_POSTFIX='.png'
 

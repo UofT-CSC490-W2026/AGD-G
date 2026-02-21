@@ -31,7 +31,6 @@ app = modal.App(
         image=data_pipeline_image,
         secrets=[
             modal.Secret.from_name("aws"),
-            modal.Secret.from_name("aws-rds"),
             modal.Secret.from_name("huggingface"),
         ],
     )

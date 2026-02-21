@@ -26,7 +26,6 @@ app = modal.App(
     image=image,
     secrets=[
         modal.Secret.from_name("aws"),
-        modal.Secret.from_name("aws-rds"),
         modal.Secret.from_name("huggingface"),
     ],
 )

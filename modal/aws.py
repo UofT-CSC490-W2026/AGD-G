@@ -4,7 +4,16 @@ import boto3
 from botocore.exceptions import ClientError
 import psycopg2
 from contextlib import contextmanager
-from config import GraphType, BUCKET, IMAGE_PREFIX, IMAGE_POSTFIX, RDS_HOST
+from config import (
+    GraphType,
+	BUCKET,
+	IMAGE_PREFIX,
+	IMAGE_POSTFIX,
+    AWS_REGION,
+	RDS_HOST,
+    RDS_PORT,
+    RDS_USER
+)
 
 @contextmanager
 def get_db_connection():
@@ -14,13 +23,19 @@ def get_db_connection():
     close when the `with` block ends.
     """
     conn = None
+    client = boto3.client("rds", region_name=AWS_REGION)
+    token = client.generate_db_auth_token(
+        DBHostname=RDS_HOST,
+        Port=RDS_PORT,
+        DBUsername=RDS_USER,
+    )
     try:
         conn = psycopg2.connect(
             host=RDS_HOST,
-            port=5432,
+            port=RDS_PORT,
             database='postgres',
-            user='postgres',
-            password=os.environ["DB_PASSWORD"],
+            user=RDS_USER,
+            password=token,   #not using os.environ["DB_PASSWORD"],
             sslmode='require'
         )
         yield conn

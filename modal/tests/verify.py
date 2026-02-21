@@ -10,6 +10,7 @@ image = (
     modal.Image.debian_slim(python_version="3.11")
     .pip_install("boto3", "psycopg2-binary", "Pillow")
     .add_local_file("aws.py", "/root/aws.py")
+    .add_local_file("config.py", "/root/config.py")
 )
 
 TARGET_SIZE = 512
@@ -17,7 +18,7 @@ TARGET_SIZE = 512
 
 @app.function(
     image=image,
-    secrets=[modal.Secret.from_name("aws"), modal.Secret.from_name("aws-rds")],
+    secrets=[modal.Secret.from_name("aws")],
     timeout=600, memory=2048,
 )
 def verify(count: int = 10, check_all: bool = False):
