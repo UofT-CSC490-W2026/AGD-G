@@ -1,0 +1,7 @@
+torch
+diffusers
+transformers
+pillow
+tqdm
+accelerate
+python-dotenv
