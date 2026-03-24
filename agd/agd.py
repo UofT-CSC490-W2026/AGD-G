@@ -9,7 +9,8 @@ import modal
 
 logging.basicConfig(level=logging.WARNING)
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
+#logger.setLevel(logging.DEBUG)
+logger.setLevel(logging.INFO)
 
 class AGDAttack:
     def __init__(
@@ -60,8 +61,6 @@ class AGDAttack:
         self.unet.requires_grad_(False)
         self.text_encoder.requires_grad_(False)
         self.clip_model.requires_grad_(False)
-        for thing in [self.scheduler, self.vae, self.unet, self.text_encoder, self.clip_model]:
-            print(type(thing))
 
     def get_image_embedding_from_tensor(self, pixel_values):
         """
@@ -134,15 +133,18 @@ class AGDAttack:
 
         # Algorithm 1, Line 1: Generate Target Image x_0_tar = T2I(a_tar)
         # We generate a synthetic target image to guide the adversarial features.
-        logger.info("Generating target image")
-        target_image_pil = self.pipe(target_prompt, num_inference_steps=100).images[0]
-        target_image_pil.save("images/target.png")
+        try:
+            target_image_pil = Image.open("images/target.png")
+        except FileNotFoundError:
+            logger.info("Generating target image")
+            target_image_pil = self.pipe(target_prompt, num_inference_steps=100).images[0]
+            target_image_pil.save("images/target.png")
 
         # Algorithm 1, Line 2: Obtain CLIP features z_0_tar = CLIP(x_0_tar)
-        logger.info("Generating target image embedding")
+        logger.debug("Generating target image embedding")
         z_target = self.get_image_embedding_from_pil(target_image_pil).detach()
 
-        logger.info("Running forward diffusion (adding noise)")
+        logger.debug("Running forward diffusion (adding noise)")
         # Algorithm 1, Line 3: Add noise to clean image to get x_T_cle
         # x_T = sqrt(alpha_T)*x_0 + sqrt(1-alpha_T)*epsilon
         self.scheduler.set_timesteps(diffusion_steps)
@@ -152,7 +154,7 @@ class AGDAttack:
         # Add noise to the clean latent to verify the starting point T
         x_t = self.scheduler.add_noise(clean_latents, noise, timesteps[0:1])
 
-        logger.info("Embedding prompt for Stable Diffusion")
+        logger.debug("Embedding prompt for Stable Diffusion")
         text_inputs = self.tokenizer(
             clean_prompt,
             padding="max_length",
@@ -293,8 +295,9 @@ app = modal.App(
     )
 
 @app.function(
-        gpu="T4:1",
-    )
+    gpu="T4:1",
+    timeout=3600,
+)
 def agd_test(
     diffusion_steps: int = 100,
     delta: int = 5,
@@ -302,22 +305,28 @@ def agd_test(
     clean_prompt: str = "A fish",
     target_prompt: str = "A baseball",
     start_step: int = 0,
+    gamma: float = 6.0,
 ):
     # Ensure you have an image named 'clean_input.png'
     logger.info("AGD Class loaded")
-    attacker = AGDAttack(small_vram=True)
-    logger.info("Running AGD")
-    adv_img = attacker.attack(
-        clean_image_path="clean_image.png",
-        clean_prompt=clean_prompt,
-        target_prompt=target_prompt,
-        diffusion_steps=diffusion_steps,
-        delta=delta,
-        gamma=6.0,
-        start_step=start_step,
-        inject_steps=inject_steps,
-    )
-    adv_img.save("images/adversarial_output.png")
+    attacker = AGDAttack()
+    for delta in [10, 20, 30]:
+        for actual_steps in [1]:
+            for gamma in [6, 12, 18]:
+                for inject_steps in [50, 200, 400]:
+                    start_step = 100 - delta - actual_steps
+                    logger.info(f"Running AGD with delta={delta} actual_steps={actual_steps} gamma={gamma} N={inject_steps}")
+                    adv_img = attacker.attack(
+                        clean_image_path="clean_image.png",
+                        clean_prompt=clean_prompt,
+                        target_prompt=target_prompt,
+                        diffusion_steps=diffusion_steps,
+                        delta=delta,
+                        gamma=gamma,
+                        start_step=start_step,
+                        inject_steps=inject_steps,
+                    )
+                    adv_img.save(f"images/delta={delta}_actual_steps={actual_steps}_gamma={gamma}_N={inject_steps}.png")
 
 # Usage Example
 if __name__ == "__main__":
