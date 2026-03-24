@@ -1,7 +1,7 @@
 import logging
 import numpy as np
 import torch
-from diffusers import StableDiffusionPipeline
+from diffusers import DDIMScheduler, StableDiffusionPipeline
 from transformers import CLIPProcessor, CLIPModel
 from PIL import Image
 from tqdm import tqdm
@@ -40,9 +40,11 @@ class AGDAttack:
         # Disable safety checker for adversarial research purposes
         self.pipe.safety_checker = None
 
-        # Use DDIM or DDPM scheduler as per paper logic (Algorithm 1 implies standard denoising)
-        # The paper mentions standard reverse sampling (Eq 6, 7)[cite: 138].
-        self.scheduler = self.pipe.scheduler
+        # Use a DDIM scheduler for the AGD reverse process and a second DDIM
+        # scheduler instance for the DDPM inversion forward process.
+        self.scheduler = DDIMScheduler.from_config(self.pipe.scheduler.config)
+        self.inversion_scheduler = DDIMScheduler.from_config(self.pipe.scheduler.config)
+        self.pipe.scheduler = self.scheduler
         self.vae = self.pipe.vae.to(self.vae_device)
         self.unet = self.pipe.unet
         self.tokenizer = self.pipe.tokenizer
@@ -105,6 +107,157 @@ class AGDAttack:
         image = (image * 255).round().astype("uint8")
         return [Image.fromarray(img) for img in image]
 
+    def _encode_prompt_embeddings(self, prompt):
+        """Returns conditional and unconditional prompt embeddings for CFG."""
+        text_inputs = self.tokenizer(
+            prompt,
+            padding="max_length",
+            max_length=self.tokenizer.model_max_length,
+            truncation=True,
+            return_tensors="pt",
+        ).to(self.sd_device)
+        uncond_inputs = self.tokenizer(
+            "",
+            padding="max_length",
+            max_length=self.tokenizer.model_max_length,
+            truncation=True,
+            return_tensors="pt",
+        ).to(self.sd_device)
+
+        with torch.no_grad():
+            cond_embeds = self.text_encoder(text_inputs.input_ids)[0]
+            uncond_embeds = self.text_encoder(uncond_inputs.input_ids)[0]
+
+        return cond_embeds, uncond_embeds
+
+    def _predict_cfg_noise(self, latents, timestep, cond_embeds, uncond_embeds, guidance_scale):
+        """Predicts noise using classifier-free guidance."""
+        latent_model_input = torch.cat([latents, latents], dim=0)
+        prompt_embeds = torch.cat([uncond_embeds, cond_embeds], dim=0)
+
+        with torch.no_grad():
+            noise_pred = self.unet(
+                latent_model_input,
+                timestep,
+                encoder_hidden_states=prompt_embeds,
+            ).sample
+
+        noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
+        return noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
+
+    def _inversion_variance(self, scheduler, timestep):
+        prev_timestep = timestep - (
+            scheduler.config.num_train_timesteps // scheduler.num_inference_steps
+        )
+        alpha_prod_t = scheduler.alphas_cumprod[timestep]
+        alpha_prod_t_prev = (
+            scheduler.alphas_cumprod[prev_timestep]
+            if prev_timestep >= 0
+            else scheduler.final_alpha_cumprod
+        )
+        beta_prod_t = 1 - alpha_prod_t
+        beta_prod_t_prev = 1 - alpha_prod_t_prev
+        return (beta_prod_t_prev / beta_prod_t) * (1 - alpha_prod_t / alpha_prod_t_prev)
+
+    def _sample_xts_from_x0(self, scheduler, x0, num_inference_steps):
+        """Samples x_t ~ q(x_t | x_0) for all timesteps, matching the repo logic."""
+        alpha_bar = scheduler.alphas_cumprod.to(device=x0.device, dtype=x0.dtype)
+        sqrt_one_minus_alpha_bar = (1 - alpha_bar).sqrt()
+        timesteps = scheduler.timesteps.to(x0.device)
+        t_to_idx = {int(v): k for k, v in enumerate(timesteps)}
+        xts = torch.zeros(
+            (num_inference_steps + 1, *x0.shape[1:]),
+            device=x0.device,
+            dtype=x0.dtype,
+        )
+        xts[0] = x0[0]
+        for t in reversed(timesteps):
+            idx = num_inference_steps - t_to_idx[int(t)]
+            xts[idx] = x0[0] * alpha_bar[t].sqrt() + torch.randn_like(x0[0]) * sqrt_one_minus_alpha_bar[t]
+        return xts
+
+    def _ddpm_inversion_start_latent(
+        self,
+        clean_latents,
+        cond_embeds,
+        uncond_embeds,
+        diffusion_steps,
+        start_step,
+        guidance_scale=3.5,
+        eta=1.0,
+    ):
+        """
+        Builds the initial noisy latent with a faithful adaptation of the
+        DDPM inversion repo's forward process.
+        """
+        scheduler = self.inversion_scheduler
+        scheduler.set_timesteps(diffusion_steps)
+        timesteps = scheduler.timesteps.to(clean_latents.device)
+
+        if start_step < 0 or start_step >= len(timesteps):
+            raise ValueError(f"start_step must be in [0, {len(timesteps) - 1}], got {start_step}")
+
+        if eta == 0:
+            x_t = clean_latents.detach().clone()
+            for t in timesteps:
+                noise_pred = self._predict_cfg_noise(
+                    x_t,
+                    t,
+                    cond_embeds,
+                    uncond_embeds,
+                    guidance_scale,
+                )
+                next_timestep = min(
+                    scheduler.config.num_train_timesteps - 2,
+                    int(t.item()) + scheduler.config.num_train_timesteps // scheduler.num_inference_steps,
+                )
+                alpha_prod_t = scheduler.alphas_cumprod[t].to(device=x_t.device, dtype=x_t.dtype)
+                beta_prod_t = 1 - alpha_prod_t
+                pred_original_sample = (x_t - beta_prod_t.sqrt() * noise_pred) / alpha_prod_t.sqrt()
+                x_t = scheduler.add_noise(
+                    pred_original_sample,
+                    noise_pred,
+                    torch.tensor([next_timestep], device=x_t.device),
+                )
+            return x_t
+
+        xts = self._sample_xts_from_x0(scheduler, clean_latents.detach().clone(), diffusion_steps)
+        alpha_bar = scheduler.alphas_cumprod.to(device=clean_latents.device, dtype=clean_latents.dtype)
+        t_to_idx = {int(v): k for k, v in enumerate(timesteps)}
+
+        x_t = clean_latents.detach().clone()
+        for t in timesteps:
+            idx = diffusion_steps - t_to_idx[int(t)] - 1
+            x_t = xts[idx + 1][None]
+            noise_pred = self._predict_cfg_noise(
+                x_t,
+                t,
+                cond_embeds,
+                uncond_embeds,
+                guidance_scale,
+            )
+
+            xtm1 = xts[idx][None]
+            pred_original_sample = (x_t - (1 - alpha_bar[t]).sqrt() * noise_pred) / alpha_bar[t].sqrt()
+
+            prev_timestep = int(t.item()) - (
+                scheduler.config.num_train_timesteps // scheduler.num_inference_steps
+            )
+            alpha_prod_t_prev = (
+                alpha_bar[prev_timestep]
+                if prev_timestep >= 0
+                else scheduler.final_alpha_cumprod.to(device=x_t.device, dtype=x_t.dtype)
+            )
+
+            variance = self._inversion_variance(scheduler, int(t.item())).to(device=x_t.device, dtype=x_t.dtype)
+            pred_sample_direction = (1 - alpha_prod_t_prev - eta * variance).clamp(min=0).sqrt() * noise_pred
+            mu_xt = alpha_prod_t_prev.sqrt() * pred_original_sample + pred_sample_direction
+            z = (xtm1 - mu_xt) / (eta * variance.sqrt())
+            xtm1 = mu_xt + (eta * variance.sqrt()) * z
+            xts[idx] = xtm1[0]
+
+        return xts[diffusion_steps - start_step][None]
+
     def attack(self,
                clean_image_path,
                clean_prompt,
@@ -114,7 +267,9 @@ class AGDAttack:
                gamma=6.0,
                start_step=0,
                inject_steps=50,
-               momentum_lambda=0.9):
+               momentum_lambda=0.9,
+               inversion_cfg_scale=3.5,
+               inversion_eta=1.0):
         """
         Executes Algorithm 1: Adversarial image generation.
 
@@ -126,6 +281,8 @@ class AGDAttack:
             gamma (float): Scale parameter (Paper uses 6.0)[cite: 231].
             N (int): Inner iterations (Paper uses 50)[cite: 231].
             momentum_lambda (float): Momentum factor (Paper uses 0.9)[cite: 231].
+            inversion_cfg_scale (float): CFG scale used during DDPM inversion.
+            inversion_eta (float): Stochasticity used during DDPM inversion.
         """
         # Preprocess Clean Image (x_0_cle)
         clean_pil = Image.open(clean_image_path).convert("RGB").resize((512, 512))
@@ -144,28 +301,21 @@ class AGDAttack:
         logger.debug("Generating target image embedding")
         z_target = self.get_image_embedding_from_pil(target_image_pil).detach()
 
-        logger.debug("Running forward diffusion (adding noise)")
-        # Algorithm 1, Line 3: Add noise to clean image to get x_T_cle
-        # x_T = sqrt(alpha_T)*x_0 + sqrt(1-alpha_T)*epsilon
+        logger.debug("Embedding prompt for Stable Diffusion")
+        clean_prompt_embeds, clean_uncond_embeds = self._encode_prompt_embeddings(clean_prompt)
+
+        logger.debug("Running DDPM inversion to initialize the noisy latent")
         self.scheduler.set_timesteps(diffusion_steps)
         timesteps = self.scheduler.timesteps[start_step:]
-
-        noise = torch.randn_like(clean_latents)
-        # Add noise to the clean latent to verify the starting point T
-        x_t = self.scheduler.add_noise(clean_latents, noise, timesteps[0:1])
-
-        logger.debug("Embedding prompt for Stable Diffusion")
-        text_inputs = self.tokenizer(
-            clean_prompt,
-            padding="max_length",
-            max_length=self.tokenizer.model_max_length,
-            truncation=True,
-            return_tensors="pt",
-        ).to(self.sd_device)
-
-        # Get the embeddings directly from the Text Encoder
-        with torch.no_grad():
-            clean_prompt_embeds = self.text_encoder(text_inputs.input_ids)[0]
+        x_t = self._ddpm_inversion_start_latent(
+            clean_latents=clean_latents,
+            cond_embeds=clean_prompt_embeds,
+            uncond_embeds=clean_uncond_embeds,
+            diffusion_steps=diffusion_steps,
+            start_step=start_step,
+            guidance_scale=inversion_cfg_scale,
+            eta=inversion_eta,
+        )
 
         logger.info("Starting Reverse Diffusion...")
 
