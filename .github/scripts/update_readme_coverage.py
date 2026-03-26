@@ -48,9 +48,14 @@ def main() -> int:
     replacement = build_block(percent)
 
     readme = readme_path.read_text()
-    start = readme.index(START_MARKER)
-    end = readme.index(END_MARKER) + len(END_MARKER)
-    readme_path.write_text(readme[:start] + replacement + readme[end:])
+    if START_MARKER in readme and END_MARKER in readme:
+        start = readme.index(START_MARKER)
+        end = readme.index(END_MARKER) + len(END_MARKER)
+        updated = readme[:start] + replacement + readme[end:]
+    else:
+        updated = readme.rstrip() + "\n\n## CI Status\n\n" + replacement + "\n"
+
+    readme_path.write_text(updated)
     return 0
 
 
