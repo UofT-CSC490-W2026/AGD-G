@@ -1,0 +1,116 @@
+name: Modal Coverage
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/modal-coverage.yml"
+      - ".github/scripts/update_readme_coverage.py"
+      - "README.md"
+      - "requirements.txt"
+      - "modal/**"
+  push:
+    paths:
+      - ".github/workflows/modal-coverage.yml"
+      - ".github/scripts/update_readme_coverage.py"
+      - "README.md"
+      - "requirements.txt"
+      - "modal/**"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  modal-coverage:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt -r modal/requirements-test.txt
+
+      - name: Run modal tests with coverage
+        working-directory: modal
+        run: |
+          pytest \
+            --cov=aws \
+            --cov=config \
+            --cov=data_pipeline.clean \
+            --cov=data_pipeline.eval \
+            --cov=data_pipeline.main \
+            --cov=data_pipeline.preprocess_charts \
+            --cov-report=term-missing \
+            --cov-report=xml:coverage.xml \
+            --cov-report=json:coverage.json \
+            --cov-report=markdown:coverage.md \
+            --cov-report=markdown-append:${GITHUB_STEP_SUMMARY} \
+            .
+
+      - name: Update README coverage block
+        run: python .github/scripts/update_readme_coverage.py modal/coverage.json README.md
+
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: modal-coverage
+          path: |
+            modal/coverage.json
+            modal/coverage.xml
+            modal/coverage.md
+
+      - name: Commit README update on default branch
+        if: github.event_name == 'push' && github.ref_name == github.event.repository.default_branch
+        run: |
+          if git diff --quiet README.md; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add README.md
+          git commit -m "docs: update modal coverage"
+          git push
+
+      - name: Comment coverage on pull request
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require("fs");
+            const body = [
+              "<!-- modal-coverage-comment -->",
+              "## Modal Coverage",
+              "",
+              fs.readFileSync("modal/coverage.md", "utf8"),
+            ].join("\n");
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number,
+            });
+            const existing = comments.find((comment) =>
+              comment.body.includes("<!-- modal-coverage-comment -->")
+            );
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number,
+                body,
+              });
+            }
