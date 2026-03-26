@@ -145,14 +145,62 @@ class CLIPAttack:
             feats = self.get_features(target_t)
         return [f.detach() for f in feats]
 
+    def get_text_feature(self, text: str):
+        """
+        CLIP text embedding projected into the shared image-text space.
+        """
+        tokenized = self.clip_processor.tokenizer(
+            [text],
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+        ).to(self.device)
+        with torch.no_grad():
+            out = self.clip_model.text_model(
+                **tokenized,
+                return_dict=True,
+            )
+            text_embed = self.clip_model.text_projection(out.pooler_output)
+        text_embed = text_embed / text_embed.norm(p=2, dim=-1, keepdim=True)
+        return text_embed.detach()
+
+    @staticmethod
+    def _eot_augment(
+        x: torch.Tensor,
+        noise_std: float = 0.0,
+        brightness: float = 0.0,
+        shift_px: int = 0,
+    ) -> torch.Tensor:
+        """
+        Lightweight differentiable augmentations for transfer (EOT).
+        """
+        y = x
+        if noise_std > 0:
+            y = y + noise_std * torch.randn_like(y)
+        if brightness > 0:
+            scale = 1.0 + (2.0 * torch.rand((x.shape[0], 1, 1, 1), device=x.device) - 1.0) * brightness
+            y = y * scale
+        if shift_px > 0:
+            dy = int(torch.randint(-shift_px, shift_px + 1, (1,), device=x.device).item())
+            dx = int(torch.randint(-shift_px, shift_px + 1, (1,), device=x.device).item())
+            y = torch.roll(y, shifts=(dy, dx), dims=(2, 3))
+        return y.clamp(0, 1)
+
     def attack(
         self,
         clean_image_path,
         target_image_path=None,
+        target_text: Optional[str] = None,
+        source_text: Optional[str] = None,
         eps=16 / 255,
         alpha=2 / 255,
         steps=300,
         repel_clean: float = 0.35,
+        repel_source_text: float = 0.5,
+        eot_samples: int = 1,
+        eot_noise_std: float = 0.0,
+        eot_brightness: float = 0.0,
+        eot_shift_px: int = 0,
         mode: str = "targeted_image",
     ):
         clean_pil = Image.open(clean_image_path).convert("RGB").resize((512, 512))
@@ -163,12 +211,22 @@ class CLIPAttack:
 
         clean_feats = self.get_features(clean_t)
         target_feats = None
+        target_text_feat = None
+        source_text_feat = None
         if mode == "targeted_image":
             if not target_image_path:
                 raise ValueError("target_image_path is required for mode=targeted_image")
             target_feats = self.get_target_features(target_image_path)
+        elif mode == "targeted_text":
+            if not target_text:
+                raise ValueError("target_text is required for mode=targeted_text")
+            target_text_feat = self.get_text_feature(target_text)
+            if source_text:
+                source_text_feat = self.get_text_feature(source_text)
         elif mode != "untargeted":
-            raise ValueError(f"Unknown mode: {mode}. Use 'targeted_image' or 'untargeted'.")
+            raise ValueError(
+                f"Unknown mode: {mode}. Use 'targeted_image', 'targeted_text', or 'untargeted'."
+            )
 
         # Random start within eps-ball
         delta = torch.empty_like(clean_t).uniform_(-eps, eps)
@@ -185,22 +243,52 @@ class CLIPAttack:
 
         for i in tqdm(range(steps), desc="CLIP PGD"):
             adv = (clean_t + delta).clamp(0, 1)
-            adv_feats = self.get_features(adv)
-
+            loss = 0.0
             sim_clean = 0.0
-            for f_adv, f_cln in zip(adv_feats, clean_feats):
-                sim_clean += F.cosine_similarity(f_adv, f_cln).mean()
-            sim_clean = sim_clean / len(adv_feats)
-            if mode == "targeted_image":
-                sim_target = 0.0
-                for f_adv, f_tar in zip(adv_feats, target_feats):
-                    sim_target += F.cosine_similarity(f_adv, f_tar).mean()
-                sim_target = sim_target / len(adv_feats)
-                # Pull toward target and push away from clean embedding.
-                loss = -sim_target + repel_clean * sim_clean
-            else:
-                # Untargeted: only push away from clean semantics.
-                loss = sim_clean
+            sim_target = 0.0
+            sim_text = 0.0
+            sim_source_text = 0.0
+            n = max(1, int(eot_samples))
+            for _ in range(n):
+                adv_aug = self._eot_augment(
+                    adv,
+                    noise_std=eot_noise_std,
+                    brightness=eot_brightness,
+                    shift_px=eot_shift_px,
+                )
+                adv_feats = self.get_features(adv_aug)
+
+                sc = 0.0
+                for f_adv, f_cln in zip(adv_feats, clean_feats):
+                    sc += F.cosine_similarity(f_adv, f_cln).mean()
+                sc = sc / len(adv_feats)
+                sim_clean += sc
+
+                if mode == "targeted_image":
+                    st = 0.0
+                    for f_adv, f_tar in zip(adv_feats, target_feats):
+                        st += F.cosine_similarity(f_adv, f_tar).mean()
+                    st = st / len(adv_feats)
+                    sim_target += st
+                    loss = loss + (-st + repel_clean * sc)
+                elif mode == "targeted_text":
+                    stx = F.cosine_similarity(adv_feats[-1], target_text_feat).mean()
+                    sim_text += stx
+                    step_loss = -stx + repel_clean * sc
+                    if source_text_feat is not None:
+                        ssrc = F.cosine_similarity(adv_feats[-1], source_text_feat).mean()
+                        sim_source_text += ssrc
+                        step_loss = step_loss + repel_source_text * ssrc
+                    loss = loss + step_loss
+                else:
+                    # Untargeted: only push away from clean semantics.
+                    loss = loss + sc
+
+            loss = loss / n
+            sim_clean = sim_clean / n
+            sim_target = sim_target / n
+            sim_text = sim_text / n
+            sim_source_text = sim_source_text / n
 
             if loss.item() < best_loss:
                 best_loss = loss.item()
@@ -221,6 +309,17 @@ class CLIPAttack:
                         "  Step %d/%d  sim_target=%.4f sim_clean=%.4f loss=%.4f",
                         i + 1, steps, sim_target.item(), sim_clean.item(), loss.item()
                     )
+                elif mode == "targeted_text":
+                    if source_text_feat is not None:
+                        logger.info(
+                            "  Step %d/%d  sim_text=%.4f sim_source_text=%.4f sim_clean=%.4f loss=%.4f",
+                            i + 1, steps, sim_text.item(), sim_source_text.item(), sim_clean.item(), loss.item()
+                        )
+                    else:
+                        logger.info(
+                            "  Step %d/%d  sim_text=%.4f sim_clean=%.4f loss=%.4f",
+                            i + 1, steps, sim_text.item(), sim_clean.item(), loss.item()
+                        )
                 else:
                     logger.info(
                         "  Step %d/%d  sim_clean=%.4f loss=%.4f",
@@ -257,8 +356,9 @@ class CLIPTextAttackMethod(TextAttackMethod):
     """
     Text-target interface over current PGD implementation.
 
-    Current implementation supports untargeted semantics shift:
-    it ignores the text target and pushes away from clean features.
+    Supports:
+      - untargeted mode (push away from clean semantics)
+      - targeted_text mode (pull image toward target QA text semantics)
     """
 
     def __init__(self, model: TargetModel) -> None:
@@ -301,22 +401,55 @@ class CLIPTextAttackMethod(TextAttackMethod):
         eps = self._strength_to_eps(strength, hp)
         alpha = float(hp.get("alpha", 2 / 255))
         steps = int(hp.get("steps", 300))
+        mode = str(hp.get("mode", "targeted_text"))
+        repel_clean = float(hp.get("repel_clean", 0.35))
+        question = hp.get("question")
+        questions = hp.get("questions")
+        source_response = hp.get("source_response")
+        source_responses = hp.get("source_responses")
         success_sim_threshold = float(hp.get("success_sim_threshold", 0.20))
+        success_text_threshold = float(hp.get("success_text_threshold", 0.25))
+        repel_source_text = float(hp.get("repel_source_text", 0.5))
+        eot_samples = int(hp.get("eot_samples", 1))
+        eot_noise_std = float(hp.get("eot_noise_std", 0.0))
+        eot_brightness = float(hp.get("eot_brightness", 0.0))
+        eot_shift_px = int(hp.get("eot_shift_px", 0))
 
         adv_images: List[Image.Image] = []
         success_flags: List[bool] = []
 
-        for clean_img in clean:
+        for idx, (clean_img, target_text) in enumerate(zip(clean, target)):
+            q = question
+            if questions is not None:
+                q = questions[idx]
+            qa_text = (
+                f"Question: {q}\nAnswer: {target_text}" if q else target_text
+            )
+            src_resp = source_response
+            if source_responses is not None:
+                src_resp = source_responses[idx]
+            source_qa_text = None
+            if src_resp:
+                source_qa_text = (
+                    f"Question: {q}\nAnswer: {src_resp}" if q else str(src_resp)
+                )
             with tempfile.NamedTemporaryFile(suffix=".png") as tmp_clean:
                 clean_img.convert("RGB").save(tmp_clean.name)
                 adv_img = self.model.backend.attack(
                     clean_image_path=tmp_clean.name,
                     target_image_path=None,
+                    target_text=qa_text if mode == "targeted_text" else None,
+                    source_text=source_qa_text if mode == "targeted_text" else None,
                     eps=eps,
                     alpha=alpha,
                     steps=steps,
-                    repel_clean=0.0,
-                    mode="untargeted",
+                    repel_clean=repel_clean,
+                    repel_source_text=repel_source_text,
+                    eot_samples=eot_samples,
+                    eot_noise_std=eot_noise_std,
+                    eot_brightness=eot_brightness,
+                    eot_shift_px=eot_shift_px,
+                    mode=mode,
                 )
 
             adv_images.append(adv_img)
@@ -324,11 +457,17 @@ class CLIPTextAttackMethod(TextAttackMethod):
             clean_t = self._pil_to_tensor(clean_img, self.model.device)
             adv_t = self._pil_to_tensor(adv_img, self.model.device)
             with torch.no_grad():
-                sim_clean = self._avg_sim(
-                    self.model.get_multilayer_features(adv_t),
-                    self.model.get_multilayer_features(clean_t),
-                ).item()
-            success_flags.append(sim_clean < success_sim_threshold)
+                if mode == "targeted_text":
+                    target_text_feat = self.model.backend.get_text_feature(qa_text)
+                    adv_embed = self.model.forward(adv_t)
+                    sim_text = F.cosine_similarity(adv_embed, target_text_feat).mean().item()
+                    success_flags.append(sim_text > success_text_threshold)
+                else:
+                    sim_clean = self._avg_sim(
+                        self.model.get_multilayer_features(adv_t),
+                        self.model.get_multilayer_features(clean_t),
+                    ).item()
+                    success_flags.append(sim_clean < success_sim_threshold)
 
         return adv_images, success_flags
 
@@ -447,19 +586,51 @@ def attack_test(
     repel_clean: float = 0.35,
     mode: str = "targeted_image",
     clean_image_path: str = "/root/clean_image.png",
+    target_question: str = "",
+    target_response: str = "",
+    source_response: str = "",
+    repel_source_text: float = 0.5,
+    eot_samples: int = 1,
+    eot_noise_std: float = 0.0,
+    eot_brightness: float = 0.0,
+    eot_shift_px: int = 0,
 ):
     import os
     import shutil
 
     attacker = CLIPAttack()
     target_path = "/root/target.jpg" if mode == "targeted_image" else None
+    target_text = None
+    source_text = None
+    if mode == "targeted_text":
+        if target_response:
+            target_text = (
+                f"Question: {target_question}\nAnswer: {target_response}"
+                if target_question
+                else target_response
+            )
+            if source_response:
+                source_text = (
+                    f"Question: {target_question}\nAnswer: {source_response}"
+                    if target_question
+                    else source_response
+                )
+        else:
+            raise ValueError("target_response is required for mode=targeted_text")
     adv_img = attacker.attack(
         clean_image_path=clean_image_path,
         target_image_path=target_path,
+        target_text=target_text,
+        source_text=source_text,
         eps=eps,
         alpha=alpha,
         steps=steps,
         repel_clean=repel_clean,
+        repel_source_text=repel_source_text,
+        eot_samples=eot_samples,
+        eot_noise_std=eot_noise_std,
+        eot_brightness=eot_brightness,
+        eot_shift_px=eot_shift_px,
         mode=mode,
     )
     adv_img.save("/root/images/adversarial_output.png")
@@ -480,6 +651,14 @@ def main(
     repel_clean: float = 0.35,
     mode: str = "targeted_image",
     clean_image_path: str = "/root/clean_image.png",
+    target_question: str = "",
+    target_response: str = "",
+    source_response: str = "",
+    repel_source_text: float = 0.5,
+    eot_samples: int = 1,
+    eot_noise_std: float = 0.0,
+    eot_brightness: float = 0.0,
+    eot_shift_px: int = 0,
 ):
     attack_test.remote(
         eps=epsilon,
@@ -488,4 +667,12 @@ def main(
         repel_clean=repel_clean,
         mode=mode,
         clean_image_path=clean_image_path,
+        target_question=target_question,
+        target_response=target_response,
+        source_response=source_response,
+        repel_source_text=repel_source_text,
+        eot_samples=eot_samples,
+        eot_noise_std=eot_noise_std,
+        eot_brightness=eot_brightness,
+        eot_shift_px=eot_shift_px,
     )
