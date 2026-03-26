@@ -186,6 +186,62 @@ class CLIPAttack:
             y = torch.roll(y, shifts=(dy, dx), dims=(2, 3))
         return y.clamp(0, 1)
 
+    @staticmethod
+    def _build_text_like_mask(
+        clean_t: torch.Tensor,
+        edge_quantile: float = 0.88,
+        std_quantile: float = 0.70,
+        dilate_kernel: int = 7,
+        max_area_ratio: float = 0.22,
+    ) -> torch.Tensor:
+        """
+        OCR-free heuristic mask that emphasizes text/tick/legend-like regions.
+        Returns [B,1,H,W] binary float mask.
+        """
+        gray = (
+            0.299 * clean_t[:, 0:1, :, :]
+            + 0.587 * clean_t[:, 1:2, :, :]
+            + 0.114 * clean_t[:, 2:3, :, :]
+        )
+
+        sobel_x = torch.tensor(
+            [[[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]]],
+            dtype=gray.dtype,
+            device=gray.device,
+        ).unsqueeze(1)
+        sobel_y = torch.tensor(
+            [[[-1, -2, -1], [0, 0, 0], [1, 2, 1]]],
+            dtype=gray.dtype,
+            device=gray.device,
+        ).unsqueeze(1)
+        gx = F.conv2d(gray, sobel_x, padding=1)
+        gy = F.conv2d(gray, sobel_y, padding=1)
+        grad = torch.sqrt(gx * gx + gy * gy + 1e-12)
+
+        gthr = torch.quantile(grad.flatten(1), edge_quantile, dim=1).view(-1, 1, 1, 1)
+        edge_mask = (grad >= gthr).float()
+
+        mean = F.avg_pool2d(gray, kernel_size=9, stride=1, padding=4)
+        mean2 = F.avg_pool2d(gray * gray, kernel_size=9, stride=1, padding=4)
+        std = torch.sqrt((mean2 - mean * mean).clamp(min=0.0) + 1e-12)
+        sthr = torch.quantile(std.flatten(1), std_quantile, dim=1).view(-1, 1, 1, 1)
+        std_mask = (std >= sthr).float()
+
+        mask = edge_mask * std_mask
+        k = int(max(3, dilate_kernel))
+        if k % 2 == 0:
+            k += 1
+        for _ in range(2):
+            mask = F.max_pool2d(mask, kernel_size=k, stride=1, padding=k // 2)
+
+        if mask.mean().item() > max_area_ratio:
+            cgrad = grad * mask
+            cthr = torch.quantile(cgrad.flatten(1), 1.0 - max_area_ratio, dim=1).view(-1, 1, 1, 1)
+            mask = (cgrad >= cthr).float()
+            mask = F.max_pool2d(mask, kernel_size=3, stride=1, padding=1)
+
+        return mask.clamp(0, 1)
+
     def attack(
         self,
         clean_image_path,
@@ -201,6 +257,10 @@ class CLIPAttack:
         eot_noise_std: float = 0.0,
         eot_brightness: float = 0.0,
         eot_shift_px: int = 0,
+        ocr_edge_quantile: float = 0.88,
+        ocr_std_quantile: float = 0.70,
+        ocr_dilate_kernel: int = 7,
+        ocr_max_area_ratio: float = 0.22,
         mode: str = "targeted_image",
     ):
         clean_pil = Image.open(clean_image_path).convert("RGB").resize((512, 512))
@@ -210,6 +270,7 @@ class CLIPAttack:
         )
 
         clean_feats = self.get_features(clean_t)
+        perturbation_mask = None
         target_feats = None
         target_text_feat = None
         source_text_feat = None
@@ -223,9 +284,25 @@ class CLIPAttack:
             target_text_feat = self.get_text_feature(target_text)
             if source_text:
                 source_text_feat = self.get_text_feature(source_text)
+        elif mode == "targeted_text_ocr":
+            if not target_text:
+                raise ValueError("target_text is required for mode=targeted_text_ocr")
+            target_text_feat = self.get_text_feature(target_text)
+            if source_text:
+                source_text_feat = self.get_text_feature(source_text)
+            perturbation_mask = self._build_text_like_mask(
+                clean_t,
+                edge_quantile=ocr_edge_quantile,
+                std_quantile=ocr_std_quantile,
+                dilate_kernel=ocr_dilate_kernel,
+                max_area_ratio=ocr_max_area_ratio,
+            )
+            logger.info("OCR-like mask coverage: %.3f", perturbation_mask.mean().item())
         elif mode != "untargeted":
             raise ValueError(
-                f"Unknown mode: {mode}. Use 'targeted_image', 'targeted_text', or 'untargeted'."
+                "Unknown mode: "
+                f"{mode}. Use 'targeted_image', 'targeted_text', "
+                "'targeted_text_ocr', or 'untargeted'."
             )
 
         # Random start within eps-ball
@@ -271,7 +348,7 @@ class CLIPAttack:
                     st = st / len(adv_feats)
                     sim_target += st
                     loss = loss + (-st + repel_clean * sc)
-                elif mode == "targeted_text":
+                elif mode in {"targeted_text", "targeted_text_ocr"}:
                     stx = F.cosine_similarity(adv_feats[-1], target_text_feat).mean()
                     sim_text += stx
                     step_loss = -stx + repel_clean * sc
@@ -299,6 +376,8 @@ class CLIPAttack:
             with torch.no_grad():
                 delta.data = delta.data - alpha * delta.grad.sign()
                 delta.data = delta.data.clamp(-eps, eps)
+                if perturbation_mask is not None:
+                    delta.data = delta.data * perturbation_mask
                 delta.data = (clean_t + delta.data).clamp(0, 1) - clean_t
 
             delta.grad.zero_()
@@ -309,7 +388,7 @@ class CLIPAttack:
                         "  Step %d/%d  sim_target=%.4f sim_clean=%.4f loss=%.4f",
                         i + 1, steps, sim_target.item(), sim_clean.item(), loss.item()
                     )
-                elif mode == "targeted_text":
+                elif mode in {"targeted_text", "targeted_text_ocr"}:
                     if source_text_feat is not None:
                         logger.info(
                             "  Step %d/%d  sim_text=%.4f sim_source_text=%.4f sim_clean=%.4f loss=%.4f",
@@ -397,6 +476,7 @@ class CLIPTextAttackMethod(TextAttackMethod):
     ) -> Tuple[List[Image.Image], List[bool]]:
         assert len(clean) == len(target)
         hp = hyperparameters or {}
+        profile = str(hp.get("profile", "simple"))
 
         eps = self._strength_to_eps(strength, hp)
         alpha = float(hp.get("alpha", 2 / 255))
@@ -410,10 +490,27 @@ class CLIPTextAttackMethod(TextAttackMethod):
         success_sim_threshold = float(hp.get("success_sim_threshold", 0.20))
         success_text_threshold = float(hp.get("success_text_threshold", 0.25))
         repel_source_text = float(hp.get("repel_source_text", 0.5))
-        eot_samples = int(hp.get("eot_samples", 1))
-        eot_noise_std = float(hp.get("eot_noise_std", 0.0))
-        eot_brightness = float(hp.get("eot_brightness", 0.0))
-        eot_shift_px = int(hp.get("eot_shift_px", 0))
+        # Simple profile: full-image targeted text, no OCR mask, no EOT.
+        if profile == "simple":
+            if mode == "targeted_text_ocr":
+                mode = "targeted_text"
+            eot_samples = 1
+            eot_noise_std = 0.0
+            eot_brightness = 0.0
+            eot_shift_px = 0
+            ocr_edge_quantile = 0.88
+            ocr_std_quantile = 0.70
+            ocr_dilate_kernel = 7
+            ocr_max_area_ratio = 0.22
+        else:
+            eot_samples = int(hp.get("eot_samples", 1))
+            eot_noise_std = float(hp.get("eot_noise_std", 0.0))
+            eot_brightness = float(hp.get("eot_brightness", 0.0))
+            eot_shift_px = int(hp.get("eot_shift_px", 0))
+            ocr_edge_quantile = float(hp.get("ocr_edge_quantile", 0.88))
+            ocr_std_quantile = float(hp.get("ocr_std_quantile", 0.70))
+            ocr_dilate_kernel = int(hp.get("ocr_dilate_kernel", 7))
+            ocr_max_area_ratio = float(hp.get("ocr_max_area_ratio", 0.22))
 
         adv_images: List[Image.Image] = []
         success_flags: List[bool] = []
@@ -438,8 +535,8 @@ class CLIPTextAttackMethod(TextAttackMethod):
                 adv_img = self.model.backend.attack(
                     clean_image_path=tmp_clean.name,
                     target_image_path=None,
-                    target_text=qa_text if mode == "targeted_text" else None,
-                    source_text=source_qa_text if mode == "targeted_text" else None,
+                    target_text=qa_text if mode in {"targeted_text", "targeted_text_ocr"} else None,
+                    source_text=source_qa_text if mode in {"targeted_text", "targeted_text_ocr"} else None,
                     eps=eps,
                     alpha=alpha,
                     steps=steps,
@@ -449,6 +546,10 @@ class CLIPTextAttackMethod(TextAttackMethod):
                     eot_noise_std=eot_noise_std,
                     eot_brightness=eot_brightness,
                     eot_shift_px=eot_shift_px,
+                    ocr_edge_quantile=ocr_edge_quantile,
+                    ocr_std_quantile=ocr_std_quantile,
+                    ocr_dilate_kernel=ocr_dilate_kernel,
+                    ocr_max_area_ratio=ocr_max_area_ratio,
                     mode=mode,
                 )
 
@@ -457,7 +558,7 @@ class CLIPTextAttackMethod(TextAttackMethod):
             clean_t = self._pil_to_tensor(clean_img, self.model.device)
             adv_t = self._pil_to_tensor(adv_img, self.model.device)
             with torch.no_grad():
-                if mode == "targeted_text":
+                if mode in {"targeted_text", "targeted_text_ocr"}:
                     target_text_feat = self.model.backend.get_text_feature(qa_text)
                     adv_embed = self.model.forward(adv_t)
                     sim_text = F.cosine_similarity(adv_embed, target_text_feat).mean().item()
@@ -594,6 +695,11 @@ def attack_test(
     eot_noise_std: float = 0.0,
     eot_brightness: float = 0.0,
     eot_shift_px: int = 0,
+    ocr_edge_quantile: float = 0.88,
+    ocr_std_quantile: float = 0.70,
+    ocr_dilate_kernel: int = 7,
+    ocr_max_area_ratio: float = 0.22,
+    profile: str = "simple",
 ):
     import os
     import shutil
@@ -602,7 +708,16 @@ def attack_test(
     target_path = "/root/target.jpg" if mode == "targeted_image" else None
     target_text = None
     source_text = None
-    if mode == "targeted_text":
+    if profile == "simple":
+        # Minimal full-image setup: no OCR mask and no EOT.
+        if mode == "targeted_text_ocr":
+            mode = "targeted_text"
+        eot_samples = 1
+        eot_noise_std = 0.0
+        eot_brightness = 0.0
+        eot_shift_px = 0
+
+    if mode in {"targeted_text", "targeted_text_ocr"}:
         if target_response:
             target_text = (
                 f"Question: {target_question}\nAnswer: {target_response}"
@@ -616,7 +731,7 @@ def attack_test(
                     else source_response
                 )
         else:
-            raise ValueError("target_response is required for mode=targeted_text")
+            raise ValueError("target_response is required for targeted text modes")
     adv_img = attacker.attack(
         clean_image_path=clean_image_path,
         target_image_path=target_path,
@@ -631,6 +746,10 @@ def attack_test(
         eot_noise_std=eot_noise_std,
         eot_brightness=eot_brightness,
         eot_shift_px=eot_shift_px,
+        ocr_edge_quantile=ocr_edge_quantile,
+        ocr_std_quantile=ocr_std_quantile,
+        ocr_dilate_kernel=ocr_dilate_kernel,
+        ocr_max_area_ratio=ocr_max_area_ratio,
         mode=mode,
     )
     adv_img.save("/root/images/adversarial_output.png")
@@ -659,6 +778,11 @@ def main(
     eot_noise_std: float = 0.0,
     eot_brightness: float = 0.0,
     eot_shift_px: int = 0,
+    ocr_edge_quantile: float = 0.88,
+    ocr_std_quantile: float = 0.70,
+    ocr_dilate_kernel: int = 7,
+    ocr_max_area_ratio: float = 0.22,
+    profile: str = "simple",
 ):
     attack_test.remote(
         eps=epsilon,
@@ -675,4 +799,9 @@ def main(
         eot_noise_std=eot_noise_std,
         eot_brightness=eot_brightness,
         eot_shift_px=eot_shift_px,
+        ocr_edge_quantile=ocr_edge_quantile,
+        ocr_std_quantile=ocr_std_quantile,
+        ocr_dilate_kernel=ocr_dilate_kernel,
+        ocr_max_area_ratio=ocr_max_area_ratio,
+        profile=profile,
     )
