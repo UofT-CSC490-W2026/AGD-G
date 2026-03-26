@@ -8,6 +8,7 @@ module "security" {
 module "rds" {
   source = "../../modules/rds"
 
+  aws_region            = var.aws_region
   environment           = var.environment
   db_username           = var.db_username
   db_password           = var.db_password
