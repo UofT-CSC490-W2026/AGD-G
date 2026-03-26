@@ -9,7 +9,7 @@ module "iam" {
   source = "../../modules/iam"
 
   modal_rds_policy_arn = module.rds.modal_policy_arn
-  modal_s3_policy_arn = module.s3.modal_policy_arn
+  modal_s3_policy_arn  = module.s3.modal_policy_arn
 }
 
 module "rds" {

@@ -3,6 +3,6 @@ variable "key_id" {
 }
 
 variable "key_secret" {
-  type = string
+  type      = string
   sensitive = true
 }
