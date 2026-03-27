@@ -20,6 +20,7 @@ import os
 import shutil
 from PIL import Image
 
+
 def attack(
     eps: float = 16 / 255,
     alpha: float = 2 / 255,
@@ -42,46 +43,67 @@ def attack(
     ocr_max_area_ratio: float = 0.22,
     profile: str = "simple",
 ):
-    models = {
+    model_classes = {
         "clip_image": ImageCLIPModel,
         "clip_text": TextCLIPModel,
         "clip_text_patch": PatchTextCLIPModel,
     }
-    model = models[model]()
-    attackers = {
+    target_model = model_classes[model]()
+    attack_classes = {
         "untargeted": AttackVLMUntargeted,
         "targeted_image": AttackVLMImage,
         "targeted_text": AttackVLMText,
         "targeted_text_ocr": AttackVLMOCR,
     }
-    attacker = attackers[attacker](model)
-    target_path = "/root/target.jpg" if isinstance(attacker, AttackVLMImage) else None
-    target_text = None
-    source_text = None
+    attack_method = attack_classes[attacker](target_model)
 
-    if isinstance(attacker, AttackVLMText):
-        target_text = f"Question: {target_question}\nAnswer: {target_response}" if target_question else target_response
+    clean_image = Image.open(clean_image_path)
+    hyperparameters = {
+        "alpha": alpha,
+        "steps": steps,
+        "max_eps": eps,
+        "repel_clean": repel_clean,
+        "repel_source_text": repel_source_text,
+        "eot_samples": eot_samples,
+        "eot_noise_std": eot_noise_std,
+        "eot_brightness": eot_brightness,
+        "eot_shift_px": eot_shift_px,
+        "ocr_edge_quantile": ocr_edge_quantile,
+        "ocr_std_quantile": ocr_std_quantile,
+        "ocr_dilate_kernel": ocr_dilate_kernel,
+        "ocr_max_area_ratio": ocr_max_area_ratio,
+        "profile": profile,
+    }
+
+    if isinstance(attack_method, AttackVLMImage):
+        target_image = Image.open("/root/target.jpg")
+        adv_img = attack_method.attack(
+            clean=clean_image,
+            target=target_image,
+            strength=1.0,
+            hyperparameters=hyperparameters,
+        )
+    elif isinstance(attack_method, AttackVLMText):
+        target_text = (
+            f"Question: {target_question}\nAnswer: {target_response}"
+            if target_question else target_response
+        )
         if source_response:
-            source_text = f"Question: {target_question}\nAnswer: {source_response}" if target_question else source_response
+            hyperparameters["source_text"] = (
+                f"Question: {target_question}\nAnswer: {source_response}"
+                if target_question else source_response
+            )
+        adv_img = attack_method.attack(
+            clean=clean_image,
+            target=target_text,
+            strength=1.0,
+            hyperparameters=hyperparameters,
+        )
+    else:
+        adv_img = attack_method.attack(
+            clean=clean_image,
+            strength=1.0,
+            hyperparameters=hyperparameters,
+        )
 
-    adv_img = attacker.attack(
-        clean=Image.open(clean_image_path),
-        target_image_path=target_path,
-        target_text=target_text,
-        source_text=source_text,
-        eps=eps,
-        alpha=alpha,
-        steps=steps,
-        repel_clean=repel_clean,
-        repel_source_text=repel_source_text,
-        eot_samples=eot_samples,
-        eot_noise_std=eot_noise_std,
-        eot_brightness=eot_brightness,
-        eot_shift_px=eot_shift_px,
-        ocr_edge_quantile=ocr_edge_quantile,
-        ocr_std_quantile=ocr_std_quantile,
-        ocr_dilate_kernel=ocr_dilate_kernel,
-        ocr_max_area_ratio=ocr_max_area_ratio,
-    )
     adv_img.save("/root/images/adversarial_output.png")
-

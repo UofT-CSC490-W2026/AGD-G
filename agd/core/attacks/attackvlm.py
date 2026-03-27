@@ -101,7 +101,7 @@ class _AttackVLM(ABC):
         """
         return data
 
-    def attack(
+    def _run_attack(
         self,
         clean: Image.Image,
 		eps=16 / 255,
@@ -156,6 +156,16 @@ class _AttackVLM(ABC):
         return Image.fromarray(adv_np)
 
     @staticmethod
+    def _strength_to_eps(strength: float, hyperparameters: Optional[Dict] = None) -> float:
+        if strength < 0:
+            raise ValueError("strength must be non-negative")
+        hp = hyperparameters or {}
+        max_eps = float(hp.get("max_eps", 32 / 255))
+        if strength > 1.0:
+            return min(strength / 255.0, max_eps)
+        return min(strength * max_eps, max_eps)
+
+    @staticmethod
     def _eot_augment(
         x: torch.Tensor,
 		noise_std: float = 0.0,
@@ -195,6 +205,27 @@ class AttackVLMUntargeted(_AttackVLM, UntargetedAttackMethod):
     def compute_step_loss(self, adv_embed, clean_embed) -> torch.Tensor:
         return self.model(adv_embed, clean_embed)
 
+    def setup(self, clean_t: torch.Tensor, *args, **kwargs) -> None:
+        return None
+
+    def attack(
+        self,
+        clean: Image.Image,
+        strength: float,
+        hyperparameters: Optional[Dict] = None
+    ) -> Image.Image:
+        hp = hyperparameters or {}
+        return self._run_attack(
+            clean=clean,
+            eps=self._strength_to_eps(strength, hp),
+            alpha=float(hp.get("alpha", 2 / 255)),
+            steps=int(hp.get("steps", 300)),
+            eot_samples=int(hp.get("eot_samples", 1)),
+            eot_noise_std=float(hp.get("eot_noise_std", 0.0)),
+            eot_brightness=float(hp.get("eot_brightness", 0.0)),
+            eot_shift_px=int(hp.get("eot_shift_px", 0)),
+        )
+
 
 class AttackVLMImage(_AttackVLM, ImageAttackMethod):
     """
@@ -208,24 +239,46 @@ class AttackVLMImage(_AttackVLM, ImageAttackMethod):
     def setup(
         self,
         clean_t: torch.Tensor,
-        target_image_path: str,
+        target: Image.Image,
 		repel_clean: float = 0.35,
         *args, **kwargs
     ) -> None:
-        self.target_embed = self.get_target_features(target_image_path)
+        self.target_embed = self.get_target_features(target)
         self.repel_clean = repel_clean
 
     def compute_step_loss(self, adv_embed, clean_embed) -> torch.Tensor:
         sim_target = self.model(adv_embed, self.target_embed)
         sim_clean = self.model(adv_embed, clean_embed)
         step_loss = (-sim_target + self.repel_clean * sim_clean)
+        return step_loss
 
-    def get_target_features(self, image_path):
-        target_pil = Image.open(image_path).convert("RGB")
+    def get_target_features(self, target: Image.Image):
+        target_pil = target.convert("RGB")
         target_np = np.array(target_pil.resize((512, 512))).astype(np.float32) / 255.0
         target_t = torch.from_numpy(target_np).permute(2, 0, 1).unsqueeze(0).to(self.device)
         with torch.no_grad():
             return self.model.embed_image(target_t, detach=True)
+
+    def attack(
+        self,
+        clean: Image.Image,
+        target: Image.Image,
+        strength: float,
+        hyperparameters: Optional[Dict] = None
+    ) -> Image.Image:
+        hp = hyperparameters or {}
+        return self._run_attack(
+            clean=clean,
+            target=target,
+            eps=self._strength_to_eps(strength, hp),
+            alpha=float(hp.get("alpha", 2 / 255)),
+            steps=int(hp.get("steps", 300)),
+            eot_samples=int(hp.get("eot_samples", 1)),
+            eot_noise_std=float(hp.get("eot_noise_std", 0.0)),
+            eot_brightness=float(hp.get("eot_brightness", 0.0)),
+            eot_shift_px=int(hp.get("eot_shift_px", 0)),
+            repel_clean=float(hp.get("repel_clean", 0.35)),
+        )
 
 
 class AttackVLMText(_AttackVLM, TextAttackMethod):
@@ -259,10 +312,33 @@ class AttackVLMText(_AttackVLM, TextAttackMethod):
         sim_text = self.model(adv_embed, self.target_text_embed)
         sim_clean = self.model(adv_embed, clean_embed)
         step_loss = -sim_text + self.repel_clean * sim_clean
-        if self.source_text_embed:
+        if self.source_text_embed is not None:
             sim_source_text = self.model(adv_embed, self.source_text_embed)
             step_loss = step_loss + self.repel_source_text * sim_source_text
         return step_loss
+
+    def attack(
+        self,
+        clean: Image.Image,
+        target: str,
+        strength: float,
+        hyperparameters: Optional[Dict] = None
+    ) -> Image.Image:
+        hp = hyperparameters or {}
+        return self._run_attack(
+            clean=clean,
+            target_text=target,
+            source_text=hp.get("source_text"),
+            eps=self._strength_to_eps(strength, hp),
+            alpha=float(hp.get("alpha", 2 / 255)),
+            steps=int(hp.get("steps", 300)),
+            eot_samples=int(hp.get("eot_samples", 1)),
+            eot_noise_std=float(hp.get("eot_noise_std", 0.0)),
+            eot_brightness=float(hp.get("eot_brightness", 0.0)),
+            eot_shift_px=int(hp.get("eot_shift_px", 0)),
+            repel_clean=float(hp.get("repel_clean", 0.35)),
+            repel_source_text=float(hp.get("repel_source_text", 0.5)),
+        )
 
 
 class AttackVLMOCR(AttackVLMText, TextAttackMethod):
@@ -278,7 +354,7 @@ class AttackVLMOCR(AttackVLMText, TextAttackMethod):
 		ocr_max_area_ratio: float = 0.22,
         *args, **kwargs
     ) -> None:
-        super().setup(*args, **kwargs)
+        super().setup(clean_t, *args, **kwargs)
         self.perturbation_mask = self._build_text_like_mask(
             clean_t, edge_quantile=ocr_edge_quantile, std_quantile=ocr_std_quantile, dilate_kernel=ocr_dilate_kernel, max_area_ratio=ocr_max_area_ratio
         )
@@ -286,6 +362,33 @@ class AttackVLMOCR(AttackVLMText, TextAttackMethod):
     #override
     def mask(self, data):
         return data * self.perturbation_mask
+
+    def attack(
+        self,
+        clean: Image.Image,
+        target: str,
+        strength: float,
+        hyperparameters: Optional[Dict] = None
+    ) -> Image.Image:
+        hp = hyperparameters or {}
+        return self._run_attack(
+            clean=clean,
+            target_text=target,
+            source_text=hp.get("source_text"),
+            eps=self._strength_to_eps(strength, hp),
+            alpha=float(hp.get("alpha", 2 / 255)),
+            steps=int(hp.get("steps", 300)),
+            eot_samples=int(hp.get("eot_samples", 1)),
+            eot_noise_std=float(hp.get("eot_noise_std", 0.0)),
+            eot_brightness=float(hp.get("eot_brightness", 0.0)),
+            eot_shift_px=int(hp.get("eot_shift_px", 0)),
+            repel_clean=float(hp.get("repel_clean", 0.35)),
+            repel_source_text=float(hp.get("repel_source_text", 0.5)),
+            ocr_edge_quantile=float(hp.get("ocr_edge_quantile", 0.88)),
+            ocr_std_quantile=float(hp.get("ocr_std_quantile", 0.70)),
+            ocr_dilate_kernel=int(hp.get("ocr_dilate_kernel", 7)),
+            ocr_max_area_ratio=float(hp.get("ocr_max_area_ratio", 0.22)),
+        )
 
     @staticmethod
     def _build_text_like_mask(
@@ -325,4 +428,3 @@ class AttackVLMOCR(AttackVLMText, TextAttackMethod):
             mask = F.max_pool2d(mask, kernel_size=3, stride=1, padding=1)
 
         return mask.clamp(0, 1)
-

@@ -94,7 +94,7 @@ class UntargetedAttackMethod:
         self.model = model
 
     @abstractmethod
-    def text_attack(
+    def attack(
         self,
 		clean: Image.Image,
 		strength: float,
