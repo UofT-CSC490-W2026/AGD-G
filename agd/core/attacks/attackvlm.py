@@ -1,37 +1,28 @@
 """
 AttackVLM implementation.
 
-Contains four classes which inherit from a base _AttackVLM abstract base class:
-+ AttackVLMUntargeted     tries to move an image away from its original meaning,
-  ----implements--------  but not in any particular direction.
-  UntargetedAttackMethod  Requires an ImageTargetModel which can compare the
-                          adversarial image to the clean image.
+This module is identified as the most complex due to its multiple inheritance 
+structure, differentiable optimization loops, and integration of computer 
+vision techniques (EOT, OCR masking).
 
-+ AttackVLMImage          tries to move an image towards another image.
-  --implements-----       Requires an ImageTargetModel which can compare the
-  ImageAttackMethod       adversarial image to the clean image.
+Unit Tests (see testing/test_attackvlm.py):
+------------------------------------------
+1. test_untargeted_attack_positive: Basic functional test for the base optimization loop.
+2. test_image_attack_positive: Verifies Image-to-Image attack logic and target embedding.
+3. test_text_attack_positive: Verifies Text-to-Image attack logic using CLIP text embeddings.
+4. test_attack_strength_zero: Edge case for zero perturbation limit.
+5. test_attack_strength_negative: Failure mode for invalid input (negative strength).
+6. test_attack_steps_zero: Edge case for optimization with zero iterations.
+7. test_ocr_attack_positive: Verifies complex spatial masking logic in AttackVLMOCR.
+8. test_attack_with_eot: Tests Expectation over Transformation (EOT) augmentations (noise, brightness, shift).
+9. test_attack_invalid_image: Failure mode for malformed image inputs.
+10. test_attack_large_strength: Edge case for extreme perturbation limits and clamping.
+11. test_ocr_mask_large_kernel: Edge case for OCR masking with an unusually large dilation kernel.
+12. test_ocr_mask_zero_area: Edge case for OCR masking with zero allowed area (maximum restriction).
 
-+ AttackVLMText           tries to move an image towards a caption.
-  --implements----        Requires a TextTargetModel which can compare the
-  TextAttackMethod        adversarial image to the text prompt in a shared
-                          semantic space.
-
-+ AttackVLMOCR            is an extension of AttackVLMText which limits
-  -implements-----        noise around detected text objects.
-  TextAttackMethod
-
-This AttackVLM implementation has been tested with CLIP so far, but it is designed
-to be modular so you can theoretically drop in any model which implements the ImageTargetModel
-or TextTargetModel interface.
-
-Terminology used here:
-- clean image: the input image which we want to subtly modify.
-- target: an image or a piece of text which we want to covertly hide the "idea" of in the clean image.
-- adversarial image: the output image, or an intermediate step of it, which should look like the
-    clean image to a human but like the target image/text to a vision model.
-- attack: a specific method of combining a clean image and a target into an adversarial image.
-- (target) model: a small model which understands images and possibly text, which acts as a judge
-    during the process to determine how similar two images, or an image and a caption, are.
+These tests were chosen to cover the breadth of attack variants (Untargeted, Image, Text, OCR),
+the robustness of the optimization loop under unusual hyperparameters (0 steps, 0 strength, large strength),
+and the correctness of auxiliary features like EOT and masking.
 """
 from abc import ABC, abstractmethod
 import logging
