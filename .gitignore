@@ -12,6 +12,18 @@ venv
 .env
 .python-version
 
+# Test and coverage artifacts
+.coverage
+**/.coverage
+coverage.xml
+coverage.json
+coverage.md
+**/coverage.xml
+**/coverage.json
+**/coverage.md
+.pytest_cache/
+**/.pytest_cache/
+
 # Test images
 agd/*.png
 agd/*.jpg
