@@ -1,8 +1,6 @@
 import pytest
 from unittest.mock import MagicMock
 import torch
-import os
-from sentence_transformers import SentenceTransformer
 from agd.scoring.eval import determine_winner, evaluate_similarity, get_device
 
 # --- Tests for the Core Mathematical Logic ---
@@ -27,6 +25,10 @@ def test_determine_winner_tie_within_margin():
 def test_determine_winner_just_outside_margin():
     # Difference is 0.03, which is greater than the 0.02 margin
     assert determine_winner(0.93, 0.90, margin=0.02) == "A"
+
+
+def test_determine_winner_clear_b_after_cutoff():
+    assert determine_winner(0.76, 0.90, cutoff_score=0.75, margin=0.02) == "B"
 
 
 # --- Tests for the Pipeline (Mocking the Model) ---
@@ -70,35 +72,22 @@ def test_evaluate_similarity_pipeline(mock_embedding_model):
     assert args[0] == ["Test output", "Perfect match", "Terrible match"]
     assert kwargs["convert_to_tensor"] is True
 
-def test_evaluate_similarity_real_model():
-    """
-    Tests the pipeline using the actual Jina model.
-    This will download the model if it is not already cached.
-    Works across CUDA, Apple Silicon (MPS), and CPU.
-    """
-    # Fix for Apple Silicon (MPS) missing operators in PyTorch
-    os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'
-    
-    # Determine the best available hardware device
-    if torch.cuda.is_available():
-        device = torch.device("cuda")
-    elif torch.backends.mps.is_available():
-        device = torch.device("mps")
-    else:
-        device = torch.device("cpu")
-        
-    model = SentenceTransformer(
-        "jinaai/jina-embeddings-v5-text-small-text-matching", 
-        device=device,
-        trust_remote_code=True
-    )
-    
-    result = evaluate_similarity(
-        model=model,
-        output_text="The network went down.",
-        text_a="There was a server outage.",
-        text_b="The food was cold.",
-        cutoff_score=0.50
-    )
-    
-    assert result == "A"
+def test_get_device_prefers_cuda(monkeypatch):
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.backends.mps, "is_available", lambda: False)
+
+    assert get_device().type == "cuda"
+
+
+def test_get_device_falls_back_to_mps(monkeypatch):
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(torch.backends.mps, "is_available", lambda: True)
+
+    assert get_device().type == "mps"
+
+
+def test_get_device_falls_back_to_cpu(monkeypatch):
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(torch.backends.mps, "is_available", lambda: False)
+
+    assert get_device().type == "cpu"

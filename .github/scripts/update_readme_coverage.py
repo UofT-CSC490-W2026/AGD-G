@@ -5,10 +5,6 @@ import sys
 from pathlib import Path
 
 
-START_MARKER = "<!-- coverage:modal:start -->"
-END_MARKER = "<!-- coverage:modal:end -->"
-
-
 def badge_color(percent: float) -> str:
     if percent >= 90:
         return "brightgreen"
@@ -21,39 +17,42 @@ def badge_color(percent: float) -> str:
     return "red"
 
 
-def build_block(percent: float) -> str:
+def build_block(area: str, percent: float) -> str:
+    title = area.upper()
+    start_marker = f"<!-- coverage:{area}:start -->"
+    end_marker = f"<!-- coverage:{area}:end -->"
     rounded = f"{percent:.2f}"
     color = badge_color(percent)
     return "\n".join(
         [
-            START_MARKER,
-            f"![Modal coverage](https://img.shields.io/badge/modal%20coverage-{rounded}%25-{color})",
+            start_marker,
+            f"![{title} coverage](https://img.shields.io/badge/{area}%20coverage-{rounded}%25-{color})",
             "",
-            "| Area | Automation | Latest status |",
-            "| --- | --- | --- |",
-            f"| `modal/` | `pytest` + `pytest-cov` | `{rounded}%` line coverage |",
-            "| `terraform/` | `terraform fmt -check` + `terraform validate` | Coverage not applicable until Terraform tests are added |",
-            END_MARKER,
+            f"`{area}/` automated line coverage: `{rounded}%`",
+            end_marker,
         ]
     )
 
 
 def main() -> int:
-    if len(sys.argv) != 3:
-        raise SystemExit("usage: update_readme_coverage.py <coverage.json> <README.md>")
+    if len(sys.argv) != 4:
+        raise SystemExit("usage: update_readme_coverage.py <area> <coverage.json> <README.md>")
 
-    coverage_path = Path(sys.argv[1])
-    readme_path = Path(sys.argv[2])
+    area = sys.argv[1]
+    coverage_path = Path(sys.argv[2])
+    readme_path = Path(sys.argv[3])
     percent = json.loads(coverage_path.read_text())["totals"]["percent_covered"]
-    replacement = build_block(percent)
+    replacement = build_block(area, percent)
+    start_marker = f"<!-- coverage:{area}:start -->"
+    end_marker = f"<!-- coverage:{area}:end -->"
 
     readme = readme_path.read_text()
-    if START_MARKER in readme and END_MARKER in readme:
-        start = readme.index(START_MARKER)
-        end = readme.index(END_MARKER) + len(END_MARKER)
+    if start_marker in readme and end_marker in readme:
+        start = readme.index(start_marker)
+        end = readme.index(end_marker) + len(end_marker)
         updated = readme[:start] + replacement + readme[end:]
     else:
-        updated = readme.rstrip() + "\n\n## CI Status\n\n" + replacement + "\n"
+        updated = readme.rstrip() + "\n\n" + replacement + "\n"
 
     readme_path.write_text(updated)
     return 0
