@@ -1,7 +1,20 @@
+# Terraform state
 **/.terraform/
 **/.terraform.lock.hcl
 **/terraform.tfvars
 **/terraform.tfstate*
-venv
+
+# Python cache
 **/__pycache__
+
+# Python environments
+venv
 .env
+.python-version
+
+# Test images
+agd/*.png
+agd/*.jpg
+
+# Vim swap files
+[._]*.s[a-v][a-z]

@@ -1,3 +1,4 @@
+from abc import ABC, abstractmethod
 import logging
 import tempfile
 from typing import Dict, List, Optional, Tuple
@@ -6,40 +7,65 @@ import torch
 import torch.nn.functional as F
 from PIL import Image
 from tqdm import tqdm
-import modal
+
+from ..interfaces import (
+    TextTargetModel,
+    TextAttackMethod,
+    ImageTargetModel,
+    ImageAttackMethod,
+)
 
 logging.basicConfig(level=logging.WARNING)
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-class TargetModel(torch.nn.Module):
+class CLIPModel(ABC):
     def __init__(self) -> None:
         super().__init__()
 
-    def forward(self, images: torch.Tensor) -> torch.Tensor:
-        raise NotImplementedError
+    def get_image_size(self) -> Tuple[int, int]:
+        pass
 
-class TextAttackMethod:
-    def __init__(self, model: TargetModel) -> None:
-        self.model = model
+class TextCLIPModel(CLIPModel, TextTargetModel):
+    def __init__(self) -> None:
+        super().__init__()
 
-    def attack(self, clean: List[Image.Image], target: List[str], strength: float, hyperparameters: Optional[Dict] = None) -> Tuple[List[Image.Image], List[bool]]:
-        assert len(clean) == len(target)
-        raise NotImplementedError
+    def __call__(self, images: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        """
+        Given a batch of images and target text embeddings,
+        return similarity scores between each pair.
+        """
+        pass
 
-class ImageAttackMethod:
-    def __init__(self, model: TargetModel) -> None:
-        self.model = model
+    def embed(self, texts: List[str]) -> torch.Tensor:
+        """
+        Pre-compute embeddings for target texts
+        """
+        pass
 
-    def attack(self, clean: List[Image.Image], target: List[Image.Image], strength: float, hyperparameters: Optional[Dict] = None) -> Tuple[List[Image.Image], List[bool]]:
-        assert len(clean) == len(target)
-        raise NotImplementedError
+class ImageCLIPModel(CLIPModel, ImageTargetModel):
+    def __init__(self) -> None:
+        super().__init__()
 
-class CLIPAttack:
+    @abstractmethod
+    def __call__(self, images: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        """
+        Given a batch of images and target image embeddings,
+        return similarity scores between each pair.
+        """
+        pass
+
+    def embed(self, images: torch.Tensor) -> torch.Tensor:
+        """
+        Pre-compute embeddings for target images
+        """
+        pass
+
+class AttackVLM:
     def __init__(self, device="cuda", model_id="openai/clip-vit-large-patch14-336"):
         self.device = device
         from transformers import CLIPModel, CLIPProcessor
-        
+
         self.clip_model = CLIPModel.from_pretrained(model_id, torch_dtype=torch.float32).to(device)
         self.clip_processor = CLIPProcessor.from_pretrained(model_id)
         self.clip_model.requires_grad_(False)
@@ -54,6 +80,9 @@ class CLIPAttack:
         return (px - mean) / std
 
     def get_features(self, pixel_tensor):
+        """
+        Return list of hidden features with final projection at the end
+        """
         px = self._preprocess(pixel_tensor)
         out = self.vision_model(pixel_values=px, output_hidden_states=True, return_dict=True)
         hidden_states = out.hidden_states
@@ -71,6 +100,9 @@ class CLIPAttack:
         return features
 
     def get_dense_projected_features(self, pixel_tensor):
+        """
+        Return per-patch projected features
+        """
         px = self._preprocess(pixel_tensor)
         out = self.vision_model(pixel_values=px, return_dict=True)
         patches = out.last_hidden_state[:, 1:, :]
@@ -95,7 +127,12 @@ class CLIPAttack:
         return text_embed.detach()
 
     @staticmethod
-    def _eot_augment(x: torch.Tensor, noise_std: float = 0.0, brightness: float = 0.0, shift_px: int = 0) -> torch.Tensor:
+    def _eot_augment(
+        x: torch.Tensor,
+		noise_std: float = 0.0,
+		brightness: float = 0.0,
+		shift_px: int = 0
+    ) -> torch.Tensor:
         y = x
         if noise_std > 0:
             y = y + noise_std * torch.randn_like(y)
@@ -109,7 +146,13 @@ class CLIPAttack:
         return y.clamp(0, 1)
 
     @staticmethod
-    def _build_text_like_mask(clean_t: torch.Tensor, edge_quantile: float = 0.88, std_quantile: float = 0.70, dilate_kernel: int = 7, max_area_ratio: float = 0.22) -> torch.Tensor:
+    def _build_text_like_mask(
+        clean_t: torch.Tensor,
+		edge_quantile: float = 0.88,
+		std_quantile: float = 0.70,
+		dilate_kernel: int = 7,
+		max_area_ratio: float = 0.22
+    ) -> torch.Tensor:
         gray = 0.299 * clean_t[:, 0:1, :, :] + 0.587 * clean_t[:, 1:2, :, :] + 0.114 * clean_t[:, 2:3, :, :]
         sobel_x = torch.tensor([[[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]]], dtype=gray.dtype, device=gray.device).unsqueeze(1)
         sobel_y = torch.tensor([[[-1, -2, -1], [0, 0, 0], [1, 2, 1]]], dtype=gray.dtype, device=gray.device).unsqueeze(1)
@@ -141,7 +184,34 @@ class CLIPAttack:
 
         return mask.clamp(0, 1)
 
-    def attack(self, clean_image_path, target_image_path=None, target_text: Optional[str] = None, source_text: Optional[str] = None, eps=16 / 255, alpha=2 / 255, steps=300, repel_clean: float = 0.35, repel_source_text: float = 0.5, eot_samples: int = 1, eot_noise_std: float = 0.0, eot_brightness: float = 0.0, eot_shift_px: int = 0, ocr_edge_quantile: float = 0.88, ocr_std_quantile: float = 0.70, ocr_dilate_kernel: int = 7, ocr_max_area_ratio: float = 0.22, mode: str = "targeted_image"):
+    def feature_similarity(self, feats_a: List[torch.Tensor], feats_b: List[torch.Tensor]):
+        assert len(feats_a) == len(feats_b)
+        sim = 0.0
+        for a, b in zip(feats_a, feats_b):
+            sim += F.cosine_similarity(a, b).mean()
+        return sim / len(feats_a)
+
+    def attack(
+        self,
+		clean_image_path,
+		target_image_path=None,
+		target_text: Optional[str] = None,
+		source_text: Optional[str] = None,
+		eps=16 / 255,
+		alpha=2 / 255,
+		steps=300,
+		repel_clean: float = 0.35,
+		repel_source_text: float = 0.5,
+		eot_samples: int = 1,
+		eot_noise_std: float = 0.0,
+		eot_brightness: float = 0.0,
+		eot_shift_px: int = 0,
+		ocr_edge_quantile: float = 0.88,
+		ocr_std_quantile: float = 0.70,
+		ocr_dilate_kernel: int = 7,
+		ocr_max_area_ratio: float = 0.22,
+		mode: str = "targeted_image"
+    ) -> Image.Image:
         clean_pil = Image.open(clean_image_path).convert("RGB").resize((512, 512))
         clean_np = np.array(clean_pil).astype(np.float32) / 255.0
         clean_t = torch.from_numpy(clean_np).permute(2, 0, 1).unsqueeze(0).to(self.device)
@@ -151,7 +221,7 @@ class CLIPAttack:
         target_feats = None
         target_text_feat = None
         source_text_feat = None
-        
+
         if mode == "targeted_image":
             if not target_image_path:
                 raise ValueError("target_image_path is required for mode=targeted_image")
@@ -176,55 +246,45 @@ class CLIPAttack:
         best_loss = float("inf")
         best_adv = clean_t.clone()
 
-        for i in tqdm(range(steps), desc="CLIP PGD"):
+        for i in tqdm(range(steps), desc="AttackVLM"):
             adv = (clean_t + delta).clamp(0, 1)
             loss = 0.0
-            sim_clean = 0.0
-            sim_target = 0.0
-            sim_text = 0.0
-            sim_source_text = 0.0
             n = max(1, int(eot_samples))
-            
+
             for _ in range(n):
                 adv_aug = self._eot_augment(adv, noise_std=eot_noise_std, brightness=eot_brightness, shift_px=eot_shift_px)
                 adv_feats = self.get_features(adv_aug)
-
-                sc = 0.0
-                for f_adv, f_cln in zip(adv_feats, clean_feats):
-                    sc += F.cosine_similarity(f_adv, f_cln).mean()
-                sc = sc / len(adv_feats)
-                sim_clean += sc
+                sim_clean = self.feature_similarity(adv_feats, clean_feats)
 
                 if mode == "targeted_image":
-                    st = 0.0
-                    for f_adv, f_tar in zip(adv_feats, target_feats):
-                        st += F.cosine_similarity(f_adv, f_tar).mean()
-                    st = st / len(adv_feats)
-                    sim_target += st
-                    loss = loss + (-st + repel_clean * sc)
+                    # Loss is distance to target image
+                    sim_target = self.feature_similarity(adv_feats, target_feats)
+                    step_loss = (-sim_target + repel_clean * sim_clean)
+                    loss += step_loss
                 elif mode in {"targeted_text", "targeted_text_ocr"}:
-                    stx = F.cosine_similarity(adv_feats[-1], target_text_feat).mean()
-                    sim_text += stx
-                    step_loss = -stx + repel_clean * sc
+                    # Loss is similarity to clean image + distance to target text
+                    sim_text = F.cosine_similarity(adv_feats[-1], target_text_feat).mean()
+                    step_loss = -sim_text + repel_clean * sim_clean
                     if source_text_feat is not None:
-                        ssrc = F.cosine_similarity(adv_feats[-1], source_text_feat).mean()
-                        sim_source_text += ssrc
-                        step_loss = step_loss + repel_source_text * ssrc
-                    loss = loss + step_loss
+                        # Extra loss factor is similarity to source text
+                        sim_source_text = F.cosine_similarity(adv_feats[-1], source_text_feat).mean()
+                        step_loss = step_loss + repel_source_text * sim_source_text
+                    loss += step_loss
                 elif mode == "targeted_text_dense":
+                    # Loss is the minimum distance between target text and any path of the image
                     adv_dense = self.get_dense_projected_features(adv_aug)
                     sim_matrix = torch.matmul(adv_dense, target_text_feat.transpose(-1, -2)).squeeze(-1)
-                    stx = torch.max(sim_matrix, dim=-1)[0].mean()
-                    sim_text += stx
-                    step_loss = -stx + repel_clean * sc
+                    sim_text = torch.max(sim_matrix, dim=-1)[0].mean()
+                    step_loss = -sim_text + repel_clean * sim_clean
                     if source_text_feat is not None:
+                        # Extra loss factor is maximum similarity between source text and any patch
                         source_sim_matrix = torch.matmul(adv_dense, source_text_feat.transpose(-1, -2)).squeeze(-1)
-                        ssrc = torch.max(source_sim_matrix, dim=-1)[0].mean()
-                        sim_source_text += ssrc
-                        step_loss = step_loss + repel_source_text * ssrc
-                    loss = loss + step_loss
-                else:
-                    loss = loss + sc
+                        sim_source_text = torch.max(source_sim_matrix, dim=-1)[0].mean()
+                        step_loss = step_loss + repel_source_text * sim_source_text
+                    loss += step_loss
+                elif mode == "untargeted":
+                    # Loss is similarity to clean image
+                    loss += sim_clean
 
             loss = loss / n
 
@@ -246,125 +306,3 @@ class CLIPAttack:
         adv_np = best_adv[0].cpu().permute(1, 2, 0).numpy()
         adv_np = (adv_np * 255).round().clip(0, 255).astype(np.uint8)
         return Image.fromarray(adv_np)
-
-modal_image = (
-    modal.Image.debian_slim(python_version="3.11")
-    .uv_pip_install("torch", "transformers", "pillow", "tqdm", "accelerate")
-    .add_local_file("xray-fish-profile.png", "/root/clean_image.png", copy=True)
-    .add_local_file("data_viz.png", "/root/data_viz.png", copy=True)
-    .add_local_file("target.jpg", "/root/target.jpg", copy=True)
-)
-
-hf_volume = modal.Volume.from_name("huggingface-cache", create_if_missing=True)
-image_volume = modal.Volume.from_name("agd_images", create_if_missing=True)
-
-app = modal.App(
-    "pgd",
-    secrets=[modal.Secret.from_name("huggingface")],
-    image=modal_image,
-    volumes={
-        "/root/.cache/huggingface": hf_volume,
-        "/root/images": image_volume,
-    },
-)
-
-@app.function(gpu="A10G:1", timeout=900)
-def attack_test(
-    eps: float = 16 / 255,
-    alpha: float = 2 / 255,
-    steps: int = 300,
-    repel_clean: float = 0.35,
-    mode: str = "targeted_text_dense",
-    clean_image_path: str = "/root/data_viz.png",
-    target_question: str = "What is the exact value for Category B?",
-    target_response: str = "42",
-    source_response: str = "",
-    repel_source_text: float = 0.5,
-    eot_samples: int = 1,
-    eot_noise_std: float = 0.0,
-    eot_brightness: float = 0.0,
-    eot_shift_px: int = 0,
-    ocr_edge_quantile: float = 0.88,
-    ocr_std_quantile: float = 0.70,
-    ocr_dilate_kernel: int = 7,
-    ocr_max_area_ratio: float = 0.22,
-    profile: str = "simple",
-):
-    import os
-    import shutil
-
-    attacker = CLIPAttack()
-    target_path = "/root/target.jpg" if mode == "targeted_image" else None
-    target_text = None
-    source_text = None
-
-    if mode in {"targeted_text", "targeted_text_ocr", "targeted_text_dense"}:
-        target_text = f"Question: {target_question}\nAnswer: {target_response}" if target_question else target_response
-        if source_response:
-            source_text = f"Question: {target_question}\nAnswer: {source_response}" if target_question else source_response
-
-    adv_img = attacker.attack(
-        clean_image_path=clean_image_path,
-        target_image_path=target_path,
-        target_text=target_text,
-        source_text=source_text,
-        eps=eps,
-        alpha=alpha,
-        steps=steps,
-        repel_clean=repel_clean,
-        repel_source_text=repel_source_text,
-        eot_samples=eot_samples,
-        eot_noise_std=eot_noise_std,
-        eot_brightness=eot_brightness,
-        eot_shift_px=eot_shift_px,
-        ocr_edge_quantile=ocr_edge_quantile,
-        ocr_std_quantile=ocr_std_quantile,
-        ocr_dilate_kernel=ocr_dilate_kernel,
-        ocr_max_area_ratio=ocr_max_area_ratio,
-        mode=mode,
-    )
-    adv_img.save("/root/images/adversarial_output.png")
-
-@app.local_entrypoint()
-def main(
-    epsilon: float = 0.0627,
-    step_size: float = 0.0078,
-    steps: int = 300,
-    repel_clean: float = 0.35,
-    mode: str = "targeted_text_dense",
-    clean_image_path: str = "/root/data_viz.png",
-    target_question: str = "What is the exact value for Category B?",
-    target_response: str = "42",
-    source_response: str = "",
-    repel_source_text: float = 0.5,
-    eot_samples: int = 1,
-    eot_noise_std: float = 0.0,
-    eot_brightness: float = 0.0,
-    eot_shift_px: int = 0,
-    ocr_edge_quantile: float = 0.88,
-    ocr_std_quantile: float = 0.70,
-    ocr_dilate_kernel: int = 7,
-    ocr_max_area_ratio: float = 0.22,
-    profile: str = "simple",
-):
-    attack_test.remote(
-        eps=epsilon,
-        alpha=step_size,
-        steps=steps,
-        repel_clean=repel_clean,
-        mode=mode,
-        clean_image_path=clean_image_path,
-        target_question=target_question,
-        target_response=target_response,
-        source_response=source_response,
-        repel_source_text=repel_source_text,
-        eot_samples=eot_samples,
-        eot_noise_std=eot_noise_std,
-        eot_brightness=eot_brightness,
-        eot_shift_px=eot_shift_px,
-        ocr_edge_quantile=ocr_edge_quantile,
-        ocr_std_quantile=ocr_std_quantile,
-        ocr_dilate_kernel=ocr_dilate_kernel,
-        ocr_max_area_ratio=ocr_max_area_ratio,
-        profile=profile,
-    )
