@@ -1,3 +1,8 @@
+"""
+Unsuccessful AGD implementation. Kept here as evidence that we could not
+reproduce the method described in the paper.
+"""
+
 import logging
 import numpy as np
 import torch

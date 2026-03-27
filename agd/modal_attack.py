@@ -1,3 +1,6 @@
+"""
+Modal script to run the test attack. Not set up for AWS integration or production at all.
+"""
 import modal
 from core.attack import attack
 
@@ -30,7 +33,8 @@ def attack_test(
     step_size: float = 0.0078,
     steps: int = 300,
     repel_clean: float = 0.35,
-    mode: str = "targeted_text_dense",
+    attacker: str = "targeted_text",
+    model: str = "clip_text_patch",
     clean_image_path: str = "/root/data_viz.png",
     target_question: str = "What is the exact value for Category B?",
     target_response: str = "42",
@@ -51,7 +55,6 @@ def attack_test(
         alpha=step_size,
         steps=steps,
         repel_clean=repel_clean,
-        mode=mode,
         clean_image_path=clean_image_path,
         target_question=target_question,
         target_response=target_response,
