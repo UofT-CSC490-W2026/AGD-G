@@ -1,0 +1,45 @@
+name: Terraform Validate
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/terraform-validate.yml"
+      - "terraform/**"
+  push:
+    paths:
+      - ".github/workflows/terraform-validate.yml"
+      - "terraform/**"
+
+permissions:
+  contents: read
+
+jobs:
+  terraform-validate:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        environment:
+          - dev
+          - prod
+
+    defaults:
+      run:
+        working-directory: terraform/environments/${{ matrix.environment }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.8.5
+
+      - name: Check formatting
+        working-directory: terraform
+        run: terraform fmt -check -recursive
+
+      - name: Terraform init
+        run: terraform init -backend=false
+
+      - name: Terraform validate
+        run: terraform validate

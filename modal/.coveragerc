@@ -1,0 +1,14 @@
+[run]
+branch = True
+source =
+    aws.py
+    config.py
+    data_pipeline/clean.py
+    data_pipeline/eval.py
+    data_pipeline/main.py
+    data_pipeline/preprocess_charts.py
+
+[report]
+omit =
+    tests/*
+    examples/*

@@ -3,9 +3,9 @@ provider "aws" {
 }
 
 provider "postgresql" {
-  host            = module.rds.endpoint
-  username        = "postgres"
-  password        = var.db_password
-  sslmode         = "require"
+  host     = module.rds.endpoint
+  username = "postgres"
+  password = var.db_password
+  sslmode  = "require"
 }
 

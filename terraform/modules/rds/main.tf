@@ -7,8 +7,8 @@ resource "aws_db_instance" "postgres" {
 
   allocated_storage = 20
 
-  username = var.db_username
-  password = var.db_password
+  username                            = var.db_username
+  password                            = var.db_password
   iam_database_authentication_enabled = true
 
   publicly_accessible    = true
@@ -24,16 +24,16 @@ resource "aws_db_instance" "postgres" {
 resource "postgresql_role" "modal_user" {
   depends_on = [aws_db_instance.postgres]
 
-  name  = "modal_user"
-  login = true
+  name    = "modal_user"
+  login   = true
   inherit = true
-  roles = ["rds_iam"]
+  roles   = ["rds_iam"]
 }
 
 resource "postgresql_grant" "modal_public_schema_usage" {
-  database  = "postgres"
-  role = postgresql_role.modal_user.name
-  schema = "public"
+  database    = "postgres"
+  role        = postgresql_role.modal_user.name
+  schema      = "public"
   object_type = "schema"
   privileges  = ["USAGE", "CREATE"]
 

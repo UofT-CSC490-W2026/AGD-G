@@ -1,0 +1,6 @@
+pytest
+pytest-cov
+numpy
+Pillow
+torch
+tqdm
