@@ -1,0 +1,10 @@
+[run]
+branch = True
+source =
+    scoring/eval.py
+    core/attack.py
+    core/models/clip_target.py
+
+[report]
+omit =
+    testing/*
