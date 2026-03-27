@@ -4,7 +4,7 @@ from uuid import UUID
 
 import pytest
 
-from conftest import ensure_modal_root, import_fresh
+from tests.helpers import ensure_modal_root, import_fresh
 
 
 class FakeClientError(Exception):

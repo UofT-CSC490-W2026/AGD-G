@@ -3,7 +3,7 @@ import sys
 
 from PIL import Image
 
-from conftest import ensure_modal_root, import_fresh, install_fake_modal
+from tests.helpers import ensure_modal_root, import_fresh, install_fake_modal
 
 
 def make_png(mode="RGB", size=(32, 16), color=None):

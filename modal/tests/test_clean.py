@@ -1,7 +1,7 @@
 import sys
 import types
 
-from conftest import ensure_modal_root, import_fresh, install_fake_modal
+from tests.helpers import ensure_modal_root, import_fresh, install_fake_modal
 
 
 def test_clean_runs_expected_aws_steps():

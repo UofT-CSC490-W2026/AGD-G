@@ -1,4 +1,4 @@
-from conftest import ensure_modal_root, import_fresh
+from tests.helpers import ensure_modal_root, import_fresh
 
 
 def test_graph_type_string_and_names():

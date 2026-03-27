@@ -3,7 +3,7 @@ import subprocess
 
 import pytest
 
-from conftest import ensure_modal_root, import_fresh
+from tests.helpers import ensure_modal_root, import_fresh
 
 
 def load_module():

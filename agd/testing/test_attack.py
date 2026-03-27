@@ -80,9 +80,9 @@ def test_attack_builds_text_target_and_source(monkeypatch):
 
     kwargs = FakeTextAttacker.last_instance.kwargs
     assert kwargs["clean"] == "opened:clean.png"
-    assert kwargs["target_image_path"] is None
-    assert kwargs["target_text"] == "Question: Who won?\nAnswer: Ferrari"
-    assert kwargs["source_text"] == "Question: Who won?\nAnswer: Mercedes"
+    assert kwargs["target"] == "Question: Who won?\nAnswer: Ferrari"
+    assert kwargs["strength"] == 1.0
+    assert kwargs["hyperparameters"]["source_text"] == "Question: Who won?\nAnswer: Mercedes"
 
 
 def test_attack_uses_target_image_for_image_mode(monkeypatch):
@@ -95,9 +95,9 @@ def test_attack_uses_target_image_for_image_mode(monkeypatch):
     )
 
     kwargs = FakeImageAttacker.last_instance.kwargs
-    assert kwargs["target_image_path"] == "/root/target.jpg"
-    assert kwargs["target_text"] is None
-    assert kwargs["source_text"] is None
+    assert kwargs["clean"] == "opened:clean.png"
+    assert kwargs["target"] == "opened:/root/target.jpg"
+    assert kwargs["strength"] == 1.0
 
 
 def test_attack_uses_plain_response_when_question_missing(monkeypatch):
@@ -113,8 +113,8 @@ def test_attack_uses_plain_response_when_question_missing(monkeypatch):
     )
 
     kwargs = FakeTextAttacker.last_instance.kwargs
-    assert kwargs["target_text"] == "16"
-    assert kwargs["source_text"] == "15"
+    assert kwargs["target"] == "16"
+    assert kwargs["hyperparameters"]["source_text"] == "15"
 
 
 def test_attack_leaves_source_text_empty_when_not_provided(monkeypatch):
@@ -130,5 +130,5 @@ def test_attack_leaves_source_text_empty_when_not_provided(monkeypatch):
     )
 
     kwargs = FakeTextAttacker.last_instance.kwargs
-    assert kwargs["target_text"] == "Question: Who won?\nAnswer: Ferrari"
-    assert kwargs["source_text"] is None
+    assert kwargs["target"] == "Question: Who won?\nAnswer: Ferrari"
+    assert "source_text" not in kwargs["hyperparameters"]
