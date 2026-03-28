@@ -9,7 +9,7 @@ import modal
 
 app = modal.App("attackvlm-chartx-eval")
 
-MODEL_ID = "xtuner/llava-llama-3-8b-v1_1-transformers"
+MODEL_ID = "xtuner/llava-llama-3-8b-v1_1-hf"
 
 ANSWER_ONLY_PROMPT = (
     "Answer the question using the chart. Return only the answer."
@@ -19,12 +19,10 @@ image = (
     modal.Image.debian_slim(python_version="3.11")
     .apt_install("git")
     .pip_install(
+        "lmdeploy>=0.4.0",
         "torch",
         "torchvision",
-        "transformers",
         "pillow",
-        "accelerate",
-        "sentencepiece",
         "requests",
         "peft",
     )
@@ -69,9 +67,8 @@ def evaluate_chartx_attackvlm(
 
     sys.path.insert(0, "/root/project")
 
-    import torch
-    from PIL import Image
-    from transformers import AutoProcessor, LlavaForConditionalGeneration
+    from lmdeploy import GenerationConfig, TurbomindEngineConfig, pipeline
+    from lmdeploy.vl import load_image
 
     input_dir = Path("/root/outputs") / input_subdir
     metadata_path = input_dir / "metadata.jsonl"
@@ -81,49 +78,18 @@ def evaluate_chartx_attackvlm(
     if not metadata_path.exists():
         raise FileNotFoundError(f"Missing metadata file: {metadata_path}")
 
-    processor = AutoProcessor.from_pretrained(MODEL_ID)
-    model = LlavaForConditionalGeneration.from_pretrained(
-        MODEL_ID,
-        torch_dtype=torch.float16,
-        low_cpu_mem_usage=True,
-    ).to("cuda")
-    processor.patch_size = model.config.vision_config.patch_size
-    processor.vision_feature_select_strategy = model.config.vision_feature_select_strategy
-    processor.num_additional_image_tokens = 1
-    model.generation_config.eos_token_id = 128009
-    model.eval()
+    backend_config = TurbomindEngineConfig(session_len=16384)
+    gen_config = GenerationConfig(max_new_tokens=128, temperature=0.2, top_p=0.9)
+    pipe = pipeline(MODEL_ID, backend_config=backend_config)
 
     def answer_question(image_path: str, question: str) -> tuple[str, str]:
-        chart = Image.open(image_path).convert("RGB")
         prompt = (
-            "<|start_header_id|>user<|end_header_id|>\n\n"
-            f"<image>\n{ANSWER_ONLY_PROMPT}\nQuestion: {question}"
-            "<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
+            f"{ANSWER_ONLY_PROMPT}\n"
+            f"Question: {question}"
         )
-        inputs = processor(text=prompt, images=chart, return_tensors="pt")
-        inputs = {
-            key: (
-                value.to("cuda", torch.float16)
-                if hasattr(value, "to") and torch.is_floating_point(value)
-                else value.to("cuda")
-                if hasattr(value, "to")
-                else value
-            )
-            for key, value in inputs.items()
-        }
-        with torch.inference_mode():
-            generated = model.generate(
-                **inputs,
-                max_new_tokens=128,
-                do_sample=False,
-            )
-        prompt_length = inputs["input_ids"].shape[1]
-        answer_ids = generated[:, prompt_length:]
-        text = processor.batch_decode(
-            answer_ids,
-            skip_special_tokens=True,
-            clean_up_tokenization_spaces=True,
-        )[0].strip()
+        chart = load_image(image_path)
+        response = pipe((chart, prompt), gen_config=gen_config)
+        text = response.text if hasattr(response, "text") else str(response)
         answer = text.split("<|eot_id|>")[0].strip().splitlines()[0].strip()
         return answer, prompt
 
