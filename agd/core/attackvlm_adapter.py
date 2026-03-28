@@ -5,8 +5,8 @@ from typing import Any, Sequence
 
 from PIL import Image
 
-from agd.core.attacks.attackvlm import AttackVLMText
-from agd.core.models.clip_target import PatchTextCLIPModel, TextCLIPModel
+from .attacks.attackvlm import AttackVLMText
+from .models.clip_target import PatchTextCLIPModel, TextCLIPModel
 
 
 @dataclass
