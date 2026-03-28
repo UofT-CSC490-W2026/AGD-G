@@ -61,13 +61,13 @@ jobs:
             .
           mv .coverage ../.coverage.agd
 
-      - name: Combine coverage
+      - name: Coverage report
         run: |
           python -m coverage combine .coverage.modal .coverage.agd
           python -m coverage report -m
           python -m coverage xml -o coverage.xml
           python -m coverage json -o coverage.json
-          python -m coverage markdown -o coverage.md
+          python -m coverage report -m --format=markdown > coverage.md
           cat coverage.md >> $GITHUB_STEP_SUMMARY
 
       - name: Update README coverage blocks
