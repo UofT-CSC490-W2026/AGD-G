@@ -9,23 +9,26 @@ import modal
 
 app = modal.App("attackvlm-chartx-eval")
 
-MODEL_ID = "llava-hf/llava-1.5-7b-hf"
+MODEL_ID = "xtuner/llava-llama-3-8b-v1_1-transformers"
 
 ANSWER_ONLY_PROMPT = (
-    "Answer the chart question with only the final short answer. "
-    "Do not explain your reasoning. "
-    "If the answer is numeric, return only the number and unit if needed."
+    "Answer the question using the chart. Return only the answer."
 )
 
 image = (
     modal.Image.debian_slim(python_version="3.11")
+    .apt_install("git")
     .pip_install(
         "torch",
+        "torchvision",
         "transformers",
         "pillow",
         "accelerate",
         "sentencepiece",
+        "requests",
+        "peft",
     )
+    .run_commands("pip install --no-deps git+https://github.com/haotian-liu/LLaVA.git")
     .add_local_dir("agd", "/root/project/agd")
 )
 
@@ -49,7 +52,7 @@ def _answers_match(predicted: str, expected: str) -> bool:
 
 @app.function(
     image=image,
-    gpu="A10G:1",
+    gpu="A100:1",
     timeout=7200,
     memory=32768,
     secrets=[modal.Secret.from_name("huggingface")],
@@ -84,34 +87,45 @@ def evaluate_chartx_attackvlm(
         torch_dtype=torch.float16,
         low_cpu_mem_usage=True,
     ).to("cuda")
+    processor.patch_size = model.config.vision_config.patch_size
+    processor.vision_feature_select_strategy = model.config.vision_feature_select_strategy
+    processor.num_additional_image_tokens = 1
+    model.generation_config.eos_token_id = 128009
     model.eval()
 
-    def answer_question(image_path: str, question: str) -> str:
+    def answer_question(image_path: str, question: str) -> tuple[str, str]:
         chart = Image.open(image_path).convert("RGB")
         prompt = (
-            "USER: <image>\n"
-            f"{ANSWER_ONLY_PROMPT}\n\n"
-            f"Question: {question}\n"
-            "ASSISTANT:"
+            "<|start_header_id|>user<|end_header_id|>\n\n"
+            f"<image>\n{ANSWER_ONLY_PROMPT}\nQuestion: {question}"
+            "<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
         )
-        inputs = processor(images=chart, text=prompt, return_tensors="pt")
+        inputs = processor(text=prompt, images=chart, return_tensors="pt")
         inputs = {
-            key: value.to("cuda") if hasattr(value, "to") else value
+            key: (
+                value.to("cuda", torch.float16)
+                if hasattr(value, "to") and torch.is_floating_point(value)
+                else value.to("cuda")
+                if hasattr(value, "to")
+                else value
+            )
             for key, value in inputs.items()
         }
         with torch.inference_mode():
             generated = model.generate(
                 **inputs,
-                max_new_tokens=64,
+                max_new_tokens=128,
                 do_sample=False,
             )
         prompt_length = inputs["input_ids"].shape[1]
         answer_ids = generated[:, prompt_length:]
-        return processor.batch_decode(
+        text = processor.batch_decode(
             answer_ids,
             skip_special_tokens=True,
             clean_up_tokenization_spaces=True,
-        )[0].strip().splitlines()[0].strip()
+        )[0].strip()
+        answer = text.split("<|eot_id|>")[0].strip().splitlines()[0].strip()
+        return answer, prompt
 
     rows = []
     with metadata_path.open("r", encoding="utf-8") as handle:
@@ -129,8 +143,8 @@ def evaluate_chartx_attackvlm(
 
     with results_path.open("w", encoding="utf-8") as results_file:
         for row in rows:
-            clean_answer = answer_question(row["clean_path"], row["question"])
-            adv_answer = answer_question(row["adversarial_path"], row["question"])
+            clean_answer, prompt = answer_question(row["clean_path"], row["question"])
+            adv_answer, _ = answer_question(row["adversarial_path"], row["question"])
 
             clean_ok = _answers_match(clean_answer, row["answer"])
             adv_ok = _answers_match(adv_answer, row["answer"])
@@ -155,6 +169,11 @@ def evaluate_chartx_attackvlm(
                 f"[{row['id']}] clean_correct={clean_ok} adv_correct={adv_ok} "
                 f"attack_success={attack_success}"
             )
+            print(f"QUESTION: {row['question']}")
+            print(f"GROUND_TRUTH: {row['answer']}")
+            print(f"PROMPT: {prompt}")
+            print(f"CLEAN_MODEL_ANSWER: {clean_answer}")
+            print(f"ADVERSARIAL_MODEL_ANSWER: {adv_answer}")
 
     clean_accuracy = clean_correct / evaluated if evaluated else 0.0
     adv_accuracy = adv_correct / evaluated if evaluated else 0.0
