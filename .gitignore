@@ -30,3 +30,5 @@ agd/*.jpg
 
 # Vim swap files
 [._]*.s[a-v][a-z]
+.vscode/settings.json
+coverage.lcov
