@@ -135,12 +135,12 @@ class _AttackVLM(ABC):
             loss.backward()
 
             with torch.no_grad():
-                delta.data = delta.data - alpha * delta.grad.sign()
-                delta.data = delta.data.clamp(-eps, eps)
-                delta.data = self.mask(delta.data)
-                delta.data = (clean_t + delta.data).clamp(0, 1) - clean_t
-
-            delta.grad.zero_()
+                if delta.grad is not None:
+                    delta.data = delta.data - alpha * delta.grad.sign()
+                    delta.data = delta.data.clamp(-eps, eps)
+                    delta.data = self.mask(delta.data)
+                    delta.data = (clean_t + delta.data).clamp(0, 1) - clean_t
+                    delta.grad.zero_()
 
         adv_np = best_adv[0].cpu().permute(1, 2, 0).numpy()
         adv_np = (adv_np * 255).round().clip(0, 255).astype(np.uint8)

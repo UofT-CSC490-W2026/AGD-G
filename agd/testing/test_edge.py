@@ -6,13 +6,15 @@ import pytest
 import torch
 import numpy as np
 from PIL import Image
-from unittest.mock import MagicMock, patch
 from agd.core.attacks.attackvlm import (
     AttackVLMUntargeted,
     AttackVLMImage,
     AttackVLMText,
     AttackVLMOCR,
 )
+import torch.nn.functional as F
+from typing import Optional, Dict
+from tqdm import tqdm
 
 
 def assert_valid_adv_image(img):
@@ -261,6 +263,158 @@ def test_ocr_mask_zero_area(clean_image):
     
     assert_valid_adv_image(adv_img)
     clean_resized = clean_image.convert("RGB").resize((512, 512))
-    # It turns out even with 0.0 area ratio, the logic (quantile 1.0) might 
+    # Even with 0.0 area ratio, the logic (quantile 1.0) might 
     # still allow the very top-gradient pixel(s) to be perturbed.
     assert np.array(adv_img).tolist() != np.array(clean_resized).tolist()
+
+
+# 13. Edge Case: Image with size 0
+def test_attack_size_zero():
+    """
+    Coverage: _load_image_tensor resizing.
+    Significance: Tests the robustness of the preprocessing pipeline against empty 
+                  data inputs. It ensures that a lack of pixel data doesn't trigger 
+                  division-by-zero or memory allocation errors, allowing the system 
+                  to gracefully handle malformed image files.
+    Expected Behavior: Returns a valid 512x512 adversarial image.
+    """
+    model = MockImageTargetModel()
+    attacker = AttackVLMUntargeted(model, device="cpu")
+    # PIL image with (0, 0) size
+    clean_img = Image.new("RGB", (0, 0))
+    # Using 1 step for speed
+    adv_img = attacker.attack(clean_img, strength=0.5, hyperparameters={"steps": 1})
+
+    assert_valid_adv_image(adv_img)
+
+
+# 14. Edge Case: Grayscale image (1 channel)
+def test_attack_grayscale():
+    """
+    Coverage: _load_image_tensor conversion.
+    Significance: Many vision-language models (like CLIP) are strictly trained on 
+                  3-channel RGB data. This test ensures the library automatically 
+                  bridges the gap for single-channel formats without user intervention, 
+                  maintaining compatibility with standard model interfaces.
+    Expected Behavior: Returns a valid 3-channel 512x512 adversarial image.
+    """
+    model = MockImageTargetModel()
+    attacker = AttackVLMUntargeted(model, device="cpu")
+    # Grayscale "L" mode image
+    clean_img = Image.new("L", (100, 100), color=255)
+    adv_img = attacker.attack(clean_img, strength=0.5, hyperparameters={"steps": 1})
+
+    assert_valid_adv_image(adv_img)
+
+
+# 15. Edge Case: Empty text target
+def test_attack_empty_text(clean_image):
+    """
+    Coverage: AttackVLMText.setup with empty string.
+    Significance: Tests the "boundary of meaning" by ensuring the system doesn't 
+                  crash when provided with no semantic guidance. It verifies that 
+                  the underlying model's embedding function and the subsequent 
+                  loss calculation handle null strings gracefully.
+    Expected Behavior: Returns a valid 512x512 adversarial image.
+    """
+    model = MockTextTargetModel()
+    attacker = AttackVLMText(model, device="cpu")
+    # Empty string as target
+    adv_img = attacker.attack(clean_image, "", strength=0.5, hyperparameters={"steps": 1})
+
+    assert_valid_adv_image(adv_img)
+
+
+# 16. Edge Case: Extreme aspect ratio
+def test_attack_extreme_aspect_ratio():
+    """
+    Coverage: _load_image_tensor resizing logic.
+    Significance: Highlights the "semantic squashing" effect of the fixed 512x512 
+                  input size. It ensures the implementation remains numerically 
+                  stable even when image content is heavily distorted during 
+                  normalization for the target model.
+    Expected Behavior: Returns a valid 512x512 adversarial image.
+    """
+    model = MockImageTargetModel()
+    attacker = AttackVLMUntargeted(model, device="cpu")
+    # Extremely thin image (1000x10)
+    clean_img = Image.new("RGB", (1000, 10), color="blue")
+    adv_img = attacker.attack(clean_img, strength=0.5, hyperparameters={"steps": 1})
+
+    assert_valid_adv_image(adv_img)
+
+
+# 17. Edge Case: RGBA Image (Transparency)
+def test_attack_rgba_image():
+    """
+    Coverage: _load_image_tensor conversion from RGBA.
+    Significance: Ensures that images with alpha channels (like transparent PNGs) 
+                  are flattened to RGB correctly. This verifies that the 4th 
+                  channel is stripped before tensor conversion, preventing 
+                  shape mismatches in the model.
+    Expected Behavior: Returns a valid 3-channel 512x512 RGB image.
+    """
+    model = MockImageTargetModel()
+    attacker = AttackVLMUntargeted(model, device="cpu")
+    # Create an RGBA image with transparency
+    clean_img = Image.new("RGBA", (100, 100), color=(255, 0, 0, 128))
+    adv_img = attacker.attack(clean_img, strength=0.5, hyperparameters={"steps": 1})
+
+    assert_valid_adv_image(adv_img)
+
+
+# 18. Edge Case: OCR Masking on Flat Image
+def test_ocr_mask_flat_image():
+    """
+    Coverage: AttackVLMOCR._build_text_like_mask gradient logic.
+    Significance: On a solid color image, all gradients are zero. This tests 
+                  if the Sobel filtering and `torch.quantile` logic handle 
+                  zero-variance inputs without crashing or producing NaNs.
+    Expected Behavior: Returns a valid adversarial image (mask may be zeroed out).
+    """
+    model = MockTextTargetModel()
+    attacker = AttackVLMOCR(model, device="cpu")
+    # Pure white image (zero gradients)
+    clean_img = Image.new("RGB", (100, 100), color="white")
+    adv_img = attacker.attack(clean_img, "text", strength=0.5, hyperparameters={"steps": 1})
+
+    assert_valid_adv_image(adv_img)
+
+
+# 19. Failure Mode: NaN Loss Handling
+def test_attack_nan_loss(clean_image):
+    """
+    Coverage: _run_attack optimization loop robustness.
+    Significance: Tests how the optimizer reacts if the model returns NaN. 
+                  While the attack might fail to find a direction, it should 
+                  not crash the entire process. It verifies that `delta.grad` 
+                  manipulation remains safe.
+    Expected Behavior: Executes without crashing; output is a valid image.
+    """
+    class NaNModel(MockImageTargetModel):
+        def __call__(self, a, b):
+            return torch.tensor(float('nan'), requires_grad=True)
+
+    model = NaNModel()
+    attacker = AttackVLMUntargeted(model, device="cpu")
+    adv_img = attacker.attack(clean_image, strength=0.5, hyperparameters={"steps": 2})
+
+    assert_valid_adv_image(adv_img)
+
+
+# 20. Edge Case: Extreme EOT Shift
+def test_attack_extreme_eot_shift(clean_image):
+    """
+    Coverage: _eot_augment with torch.roll.
+    Significance: Tests if the Expectation over Transformation logic handles 
+                  shift values larger than the image dimensions. `torch.roll` 
+                  is circular, so this verifies that extreme values wrap around 
+                  rather than causing index errors.
+    Expected Behavior: Executes successfully using circular wrapping for shifts.
+    """
+    model = MockImageTargetModel()
+    attacker = AttackVLMUntargeted(model, device="cpu")
+    hp = {"steps": 1, "eot_samples": 1, "eot_shift_px": 1000} # Larger than 512
+    adv_img = attacker.attack(clean_image, strength=0.5, hyperparameters=hp)
+
+    assert_valid_adv_image(adv_img)
