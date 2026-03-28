@@ -418,3 +418,61 @@ def test_attack_extreme_eot_shift(clean_image):
     adv_img = attacker.attack(clean_image, strength=0.5, hyperparameters=hp)
 
     assert_valid_adv_image(adv_img)
+
+
+# 21. Regression: Target similarity term must depend on adversarial embedding
+def test_text_loss_depends_on_adv_embed(clean_image):
+    """
+    Coverage: AttackVLMText.compute_step_loss target term.
+    Rationale: If sim_text is computed from a constant (e.g. clean_embed instead of
+               adv_embed), its gradient is zero and the optimizer receives no signal
+               to steer toward the target text. This test catches that by checking
+               the loss changes when adv_embed changes.
+    Expected Behavior: Different adversarial embeddings produce different loss values.
+    """
+    model = MockTextTargetModel()
+    attacker = AttackVLMText(model, device="cpu")
+    clean_t = attacker._load_image_tensor(clean_image)
+    clean_embed = model.embed_image(clean_t)
+    # Set repel_clean=0 to isolate the target text term (-sim_text only)
+    attacker.setup(clean_t, target_text="a baseball", repel_clean=0.0)
+
+    adv_embed_a = torch.randn_like(clean_embed)
+    adv_embed_b = torch.randn_like(clean_embed)
+
+    loss_a = attacker.compute_step_loss(adv_embed_a, clean_embed)
+    loss_b = attacker.compute_step_loss(adv_embed_b, clean_embed)
+
+    assert loss_a.item() != loss_b.item(), "Loss didn't change with different adv_embed — target similarity term may be constant"
+
+
+# 22. Regression: More optimization steps must change the perturbation
+def test_optimization_updates_delta(clean_image):
+    """
+    Coverage: End-to-end targeted optimization signal.
+    Rationale: With repel_clean=0, the only gradient signal comes from the target
+               text term. If that term is accidentally constant (e.g. computed from
+               clean_embed instead of adv_embed), the gradient is zero and delta
+               never changes — meaning 1-step and 5-step attacks produce identical
+               output. Using the same random seed ensures the initial delta is the
+               same, isolating the effect of optimization.
+    Expected Behavior: 5 steps of optimization should produce a different result
+                       than 1 step.
+    """
+    model = MockTextTargetModel()
+    attacker = AttackVLMText(model, device="cpu")
+
+    # Same seed → same initial delta and same target embedding
+    torch.manual_seed(42)
+    adv_1 = attacker.attack(clean_image, "a baseball", strength=0.5,
+                            hyperparameters={"steps": 1, "repel_clean": 0.0})
+
+    torch.manual_seed(42)
+    adv_5 = attacker.attack(clean_image, "a baseball", strength=0.5,
+                            hyperparameters={"steps": 5, "repel_clean": 0.0})
+
+    arr_1 = np.array(adv_1).astype(float)
+    arr_5 = np.array(adv_5).astype(float)
+
+    diff = np.abs(arr_5 - arr_1).mean()
+    assert diff > 0.1, f"5-step attack identical to 1-step — target term gradient may be zero (diff={diff:.4f})"
