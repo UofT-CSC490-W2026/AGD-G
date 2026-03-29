@@ -89,6 +89,8 @@ def calculate_ssd(img1, img2):
 class MockImageTargetModel:
     def __init__(self):
         self.device = "cpu"
+    def get_image_size(self):
+        return (512, 512)
     def embed_image(self, x, detach=False):
         # Ensure x is differentiable if it requires grad
         # We need a path from x to the output
