@@ -9,6 +9,7 @@ are wrappers that fit the model into interfaces.
 
 from abc import ABC, abstractmethod
 from typing import Dict, List, Optional, Tuple, Any
+from collections.abc import Sequence
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -38,7 +39,8 @@ class CLIPModel(ABC):
         px = F.interpolate(images, size=self.get_image_size(), mode="bicubic", align_corners=False)
         mean = torch.tensor([0.48145466, 0.4578275, 0.40821073], device=px.device, dtype=px.dtype).view(1, 3, 1, 1)
         std = torch.tensor([0.26862954, 0.26130258, 0.27577711], device=px.device, dtype=px.dtype).view(1, 3, 1, 1)
-        return (px - mean) / std
+        output = (px - mean) / std
+        return output
 
     def get_image_size(self) -> Tuple[int, int]:
         image_size = int(self.clip_model.config.vision_config.image_size)
@@ -64,9 +66,9 @@ class TextCLIPModel(CLIPModel, TextTargetModel):
         """
         Given an image and target text embedding, return a similarity score.
         """
-        return F.cosine_similarity(image, text).mean()
+        return F.cosine_similarity(image, text, dim=-1).mean()
 
-    def embed_image(self, image: Image.Image, detach: bool = False) -> Any:
+    def embed_image(self, image: torch.Tensor, detach: bool = False) -> Any:
         """
         Get projected embedding for image, which can be compared to text.
         """
@@ -78,11 +80,12 @@ class TextCLIPModel(CLIPModel, TextTargetModel):
         features = projected / projected.norm(p=2, dim=-1, keepdim=True)
         return features.detach() if detach else features
 
-    def embed_text(self, text: str, detach: bool = True) -> Any:
+    def embed_text(self, text: str | Sequence[str], detach: bool = True) -> Any:
         """
         Get projected embedding for text, which can be compared to image.
         """
-        tokenized = self.clip_processor.tokenizer([text], return_tensors="pt", padding=True, truncation=True).to(self.device)
+        text = [text] if isinstance(text, str) else text
+        tokenized = self.clip_processor.tokenizer(text, return_tensors="pt", padding=True, truncation=True).to(self.device)
         with torch.no_grad():
             out = self.clip_model.text_model(**tokenized, return_dict=True)
             text_embed = self.clip_model.text_projection(out.pooler_output)
@@ -137,7 +140,7 @@ class ImageCLIPModel(CLIPModel, ImageTargetModel):
         """
         sim = 0.0
         for fet1, fet2 in zip(image1, image2):
-            sim += F.cosine_similarity(fet1, fet2).mean()
+            sim += F.cosine_similarity(fet1, fet2, dim=-1).mean(dim=-1)
         return sim / len(image1)
 
     def embed_image(self, image: torch.Tensor, detach: bool = False) -> List[torch.Tensor]:

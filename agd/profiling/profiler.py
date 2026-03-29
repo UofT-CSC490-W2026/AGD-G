@@ -20,7 +20,7 @@ import sys
 import os
 import datetime
 import pickle
-from typing import Callable
+from typing import Callable, List
 from PIL import Image
 from torch.profiler import profile, ProfilerActivity
 import torch
@@ -94,9 +94,13 @@ def profile_with_pytorch(function: Callable, *args, warmup: int = 10, **kwargs):
 # ================================================================================
 # Profiling targets
 
-def run_attackvlm_text(model: TextTargetModel, image: Image.Image):
+def run_attackvlm_text(model: TextTargetModel, images: List[Image.Image], targets: List[str], batch: bool = True):
     attackvlm = AttackVLMText(model)
-    attackvlm.attack(clean=image, target="a baseball", strength=1.0)
+    if batch:
+        attackvlm.attack(clean=images, target=targets, strength=1.0)
+    else:
+        for image, target in zip(images, targets):
+            attackvlm.attack(clean=image, target=target, strength=1.0)
 
 def run_clip_text(image: Image.Image):
     model = TextCLIPModel()
@@ -137,10 +141,12 @@ def load_image_tensor(path: str) -> torch.Tensor:
 # Modal functions
 
 @app.function(gpu=GPU, timeout=1200)
-def profile_attackvlm(warmup: int):
+def profile_attackvlm(warmup: int, num_images: int = 10, batch: bool = True):
     image = Image.open("test_images/test-image1.png")
+    images = [image] * num_images
+    targets = ["a baseball"] * num_images
     model = PatchTextCLIPModel()
-    profile_with_pytorch(run_attackvlm_text, model, image, warmup=warmup)
+    profile_with_pytorch(run_attackvlm_text, model, images, targets, warmup=warmup, batch=batch)
 
 @app.function(gpu=GPU, timeout=1200)
 def profile_clip_text(warmup: int):

@@ -106,4 +106,11 @@ def attack(
             hyperparameters=hyperparameters,
         )
 
-    adv_img.save("/root/images/adversarial_output.png")
+    if isinstance(adv_img, Image.Image):
+        print("saving one")
+        adv_img.save("/root/images/adversarial_output.png")
+    else:
+        print(f"saving batch with type {type(adv_img)}")
+        for i, image in enumerate(adv_img):
+            print(f"inner batch item type: {type(image)}")
+            image.save(f"/root/images/adversarial_output_{i+1}.png")

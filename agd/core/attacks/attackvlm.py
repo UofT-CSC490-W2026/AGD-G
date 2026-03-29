@@ -1,8 +1,8 @@
 """
 AttackVLM implementation.
 
-This module is identified as the most complex due to its multiple inheritance 
-structure, differentiable optimization loops, and integration of computer 
+This module is identified as the most complex due to its multiple inheritance
+structure, differentiable optimization loops, and integration of computer
 vision techniques (EOT, OCR masking).
 
 Unit Tests (see testing/test_attackvlm.py):
@@ -28,6 +28,7 @@ from abc import ABC, abstractmethod
 import logging
 import tempfile
 from typing import Dict, List, Optional, Tuple
+from collections.abc import Sequence
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -94,7 +95,7 @@ class _AttackVLM(ABC):
 
     def _run_attack(
         self,
-        clean: Image.Image,
+        clean: Image.Image | Sequence[Image.Image],
 		eps=16 / 255,
 		alpha=2 / 255,
 		steps=300,
@@ -103,8 +104,16 @@ class _AttackVLM(ABC):
 		eot_brightness: float = 0.0,
 		eot_shift_px: int = 0,
         *args, **kwargs
-    ) -> Image.Image:
-        clean_t = self._load_image_tensor(clean)
+    ) -> Sequence[Image.Image]:
+        if clean is None:
+            raise TypeError("clean image(s) must not be None")
+        single_image = isinstance(clean, Image.Image)
+        if single_image:
+            clean = [clean]
+        if any(c is None for c in clean):
+            raise TypeError("clean image(s) must not be None")
+        batch_size = len(clean)
+        clean_t = torch.stack([self._load_image_tensor(im) for im in clean])
         clean_embed = self.model.embed_image(clean_t)
 
         self.setup(clean_t, *args, **kwargs)
@@ -113,12 +122,12 @@ class _AttackVLM(ABC):
         delta = (clean_t + delta).clamp(0, 1) - clean_t
         delta.requires_grad_(True)
 
-        best_loss = float("inf")
+        best_loss = torch.full((batch_size,), float("inf"), device=self.device)
         best_adv = clean_t.clone()
 
         for i in tqdm(range(steps), desc="AttackVLM"):
             adv = (clean_t + delta).clamp(0, 1)
-            loss = 0.0
+            loss = torch.zeros((batch_size,), device=self.device)
             n = max(1, int(eot_samples))
 
             for _ in range(n):
@@ -128,10 +137,11 @@ class _AttackVLM(ABC):
 
             loss = loss / n
 
-            if loss.item() < best_loss:
-                best_loss = loss.item()
-                best_adv = adv.detach().clone()
+            mask = (loss < best_loss)
+            best_loss = torch.where(mask, loss, best_loss)
+            best_adv = torch.where(mask.view(-1, 1, 1, 1), adv.detach().clone(), best_adv)
 
+            loss = loss.mean()
             loss.backward()
 
             with torch.no_grad():
@@ -142,9 +152,14 @@ class _AttackVLM(ABC):
                     delta.data = (clean_t + delta.data).clamp(0, 1) - clean_t
                     delta.grad.zero_()
 
-        adv_np = best_adv[0].cpu().permute(1, 2, 0).numpy()
-        adv_np = (adv_np * 255).round().clip(0, 255).astype(np.uint8)
-        return Image.fromarray(adv_np)
+        output_images = []
+        for image in best_adv:
+            adv_np = image.cpu().permute(1, 2, 0).numpy()
+            adv_np = (adv_np * 255).round().clip(0, 255).astype(np.uint8)
+            output_images.append(Image.fromarray(adv_np))
+        if single_image:
+            output_images = output_images[0]
+        return output_images
 
     @staticmethod
     def _strength_to_eps(strength: float, hyperparameters: Optional[Dict] = None) -> float:
@@ -181,7 +196,7 @@ class _AttackVLM(ABC):
         """
         image = image.convert("RGB").resize((512, 512))
         clean_np = np.array(image).astype(np.float32) / 255.0
-        return torch.from_numpy(clean_np).permute(2, 0, 1).unsqueeze(0).to(self.device)
+        return torch.from_numpy(clean_np).permute(2, 0, 1).to(self.device)
 
 
 # ====================================================================================================
@@ -201,10 +216,12 @@ class AttackVLMUntargeted(_AttackVLM, UntargetedAttackMethod):
 
     def attack(
         self,
-        clean: Image.Image,
+        clean: Image.Image | Sequence[Image.Image],
         strength: float,
         hyperparameters: Optional[Dict] = None
-    ) -> Image.Image:
+    ) -> Image.Image | Sequence[Image.Image]:
+        if not isinstance(clean, Image.Image) and len(clean) == 0:
+            return []
         hp = hyperparameters or {}
         return self._run_attack(
             clean=clean,
@@ -229,12 +246,13 @@ class AttackVLMImage(_AttackVLM, ImageAttackMethod):
 
     def setup(
         self,
-        clean_t: torch.Tensor,
-        target: Image.Image,
+        clean_t: torch.Tensor | Sequence[Image.Image],
+        target: Image.Image | Sequence[Image.Image],
 		repel_clean: float = 0.35,
         *args, **kwargs
     ) -> None:
-        self.target_embed = self.get_target_features(target)
+        target = [target] if isinstance(target, Image.Image) else target
+        self.target_embed = torch.stack([self.get_target_features(t) for t in target])
         self.repel_clean = repel_clean
 
     def compute_step_loss(self, adv_embed, clean_embed) -> torch.Tensor:
@@ -256,7 +274,9 @@ class AttackVLMImage(_AttackVLM, ImageAttackMethod):
         target: Image.Image,
         strength: float,
         hyperparameters: Optional[Dict] = None
-    ) -> Image.Image:
+    ) -> Image.Image | Sequence[Image.Image]:
+        if not isinstance(clean, Image.Image) and len(clean) == 0:
+            return []
         hp = hyperparameters or {}
         return self._run_attack(
             clean=clean,
@@ -284,8 +304,8 @@ class AttackVLMText(_AttackVLM, TextAttackMethod):
 
     def setup(
         self,
-        clean_t: torch.Tensor,
-        target_text: str,
+        clean_t: torch.Tensor | Sequence[Image.Image],
+        target_text: str | Sequence[str],
         source_text: Optional[str] = None,
 		repel_clean: float = 0.35,
 		repel_source_text: float = 0.5,
@@ -314,7 +334,9 @@ class AttackVLMText(_AttackVLM, TextAttackMethod):
         target: str,
         strength: float,
         hyperparameters: Optional[Dict] = None
-    ) -> Image.Image:
+    ) -> Image.Image | Sequence[Image.Image]:
+        if not isinstance(clean, Image.Image) and len(clean) == 0:
+            return []
         hp = hyperparameters or {}
         return self._run_attack(
             clean=clean,
@@ -346,8 +368,10 @@ class AttackVLMOCR(AttackVLMText, TextAttackMethod):
         *args, **kwargs
     ) -> None:
         super().setup(clean_t, *args, **kwargs)
+        if clean_t.ndim == 3:
+            clean_t = clean_t.unsqueeze(0)
         self.perturbation_mask = self._build_text_like_mask(
-            clean_t, edge_quantile=ocr_edge_quantile, std_quantile=ocr_std_quantile, 
+            clean_t, edge_quantile=ocr_edge_quantile, std_quantile=ocr_std_quantile,
             dilate_kernel=ocr_dilate_kernel, max_area_ratio=ocr_max_area_ratio
         )
 
@@ -357,11 +381,13 @@ class AttackVLMOCR(AttackVLMText, TextAttackMethod):
 
     def attack(
         self,
-        clean: Image.Image,
+        clean: Image.Image | Sequence[Image.Image],
         target: str,
         strength: float,
         hyperparameters: Optional[Dict] = None
-    ) -> Image.Image:
+    ) -> Image.Image | Sequence[Image.Image]:
+        if not isinstance(clean, Image.Image) and len(clean) == 0:
+            return []
         hp = hyperparameters or {}
         return self._run_attack(
             clean=clean,

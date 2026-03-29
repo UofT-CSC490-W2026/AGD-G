@@ -95,7 +95,7 @@ class MockImageTargetModel:
         # features: [B, 512]
         # We can use a dummy projection: x is [B, 3, 512, 512]
         # Let's just take the mean over spatial and multiply by a dummy vector
-        feat = x.mean(dim=(2, 3)) # [B, 3]
+        feat = x.mean(dim=(-2, -1)) # [B, 3]
         # Pad to 512
         feat = torch.nn.functional.pad(feat, (0, 509)) # [B, 512]
         if detach:
@@ -166,18 +166,18 @@ def target_image():
 def test_01_untargeted_attack_positive(clean_image):
     """
     Coverage: AttackVLMUntargeted._run_attack loop.
-    Rationale: Ensures the base optimization loop can execute at least one iteration 
+    Rationale: Ensures the base optimization loop can execute at least one iteration
                without crashing and returns a valid Image object.
-    Expected Behavior: Returns a PIL Image of size 512x512 that is different from 
+    Expected Behavior: Returns a PIL Image of size 512x512 that is different from
                        the original (due to initialized delta and optimization).
     """
     model = MockImageTargetModel()
     attacker = AttackVLMUntargeted(model, device="cpu")
     # Small steps for speed
     adv_img = attacker.attack(clean_image, strength=0.5, hyperparameters={"steps": 2})
-    
+
     assert_valid_adv_image(adv_img)
-    
+
     # Assert that the image actually changed from the clean input
     assert calculate_ssd(clean_image, adv_img) > 0
 
@@ -185,15 +185,15 @@ def test_01_untargeted_attack_positive(clean_image):
 def test_02_image_attack_positive(clean_image, target_image):
     """
     Coverage: AttackVLMImage.setup and compute_step_loss.
-    Rationale: Verifies that the image-to-image attack correctly handles a target 
+    Rationale: Verifies that the image-to-image attack correctly handles a target
                image and computes a loss involving both target and clean embeddings.
-    Expected Behavior: Successfully completes the attack loop and produces a 
+    Expected Behavior: Successfully completes the attack loop and produces a
                        perturbed image.
     """
     model = MockImageTargetModel()
     attacker = AttackVLMImage(model, device="cpu")
     adv_img = attacker.attack(clean_image, target_image, strength=0.5, hyperparameters={"steps": 2})
-    
+
     assert_valid_adv_image(adv_img)
     assert calculate_ssd(clean_image, adv_img) > 0
 
@@ -201,7 +201,7 @@ def test_02_image_attack_positive(clean_image, target_image):
 def test_03_text_attack_positive(clean_image_and_target):
     """
     Coverage: AttackVLMText.setup and compute_step_loss.
-    Rationale: Ensures the text-to-image attack correctly interfaces with the 
+    Rationale: Ensures the text-to-image attack correctly interfaces with the
                model's text embedding function.
     Expected Behavior: Successfully completes the attack loop using text-based guidance.
     """
@@ -209,7 +209,7 @@ def test_03_text_attack_positive(clean_image_and_target):
     model = MockTextTargetModel()
     attacker = AttackVLMText(model, device="cpu")
     adv_img = attacker.attack(clean_image, target_text, strength=0.5, hyperparameters={"steps": 2})
-    
+
     assert_valid_adv_image(adv_img)
     assert calculate_ssd(clean_image, adv_img) > 0
 
@@ -217,7 +217,7 @@ def test_03_text_attack_positive(clean_image_and_target):
 def test_04_ocr_attack_positive(clean_image_and_target):
     """
     Coverage: AttackVLMOCR._build_text_like_mask and mask() override.
-    Rationale: OCR mode is the most complex subclass; this verifies the multi-step 
+    Rationale: OCR mode is the most complex subclass; this verifies the multi-step
                masking pipeline (Sobel, pooling, quantiles).
     Expected Behavior: Returns a masked adversarial image different from clean.
     """
@@ -225,7 +225,7 @@ def test_04_ocr_attack_positive(clean_image_and_target):
     model = MockTextTargetModel()
     attacker = AttackVLMOCR(model, device="cpu")
     adv_img = attacker.attack(clean_image, target_text, strength=0.5, hyperparameters={"steps": 2})
-    
+
     assert_valid_adv_image(adv_img)
     assert calculate_ssd(clean_image, adv_img) > 0
 
@@ -233,7 +233,7 @@ def test_04_ocr_attack_positive(clean_image_and_target):
 def test_05_attack_with_eot(clean_image):
     """
     Coverage: _eot_augment method.
-    Rationale: EOT is critical for robustness. This tests noise injection, 
+    Rationale: EOT is critical for robustness. This tests noise injection,
                brightness scaling, and spatial shifting during the inner loop.
     Expected Behavior: Executes multiple augmented forward passes per optimization step.
     """
@@ -247,7 +247,7 @@ def test_05_attack_with_eot(clean_image):
         "eot_shift_px": 2
     }
     adv_img = attacker.attack(clean_image, strength=0.5, hyperparameters=hp)
-    
+
     assert_valid_adv_image(adv_img)
     assert calculate_ssd(clean_image, adv_img) > 0
 
@@ -260,13 +260,13 @@ def test_05_attack_with_eot(clean_image):
 def test_06_attack_strength_zero(clean_image):
     """
     Coverage: _strength_to_eps helper method.
-    Rationale: Tests the boundary condition where no perturbation is allowed. 
+    Rationale: Tests the boundary condition where no perturbation is allowed.
     Expected Behavior: The output image should be identical to the resized clean image.
     """
     model = MockImageTargetModel()
     attacker = AttackVLMUntargeted(model, device="cpu")
     adv_img = attacker.attack(clean_image, strength=0.0, hyperparameters={"steps": 2})
-    
+
     # Should be identical because eps=0 forces delta=0
     assert calculate_ssd(clean_image, adv_img) == 0
 
@@ -293,7 +293,7 @@ def test_08_attack_steps_zero(clean_image):
     model = MockImageTargetModel()
     attacker = AttackVLMUntargeted(model, device="cpu")
     adv_img = attacker.attack(clean_image, strength=0.5, hyperparameters={"steps": 0})
-    
+
     assert_valid_adv_image(adv_img)
     assert calculate_ssd(clean_image, adv_img) == 0
 
@@ -301,7 +301,7 @@ def test_08_attack_steps_zero(clean_image):
 def test_09_attack_large_strength(clean_image):
     """
     Coverage: _strength_to_eps clamping logic.
-    Rationale: Verifies that the 'max_eps' hyperparameter correctly caps 
+    Rationale: Verifies that the 'max_eps' hyperparameter correctly caps
                extremely high strength values.
     Expected Behavior: Epsilon is capped at max_eps (default 32/255); code runs stably.
     """
@@ -309,7 +309,7 @@ def test_09_attack_large_strength(clean_image):
     attacker = AttackVLMUntargeted(model, device="cpu")
     # strength > 1.0 should be handled by _strength_to_eps
     adv_img = attacker.attack(clean_image, strength=1000.0, hyperparameters={"steps": 2})
-    
+
     assert_valid_adv_image(adv_img)
     assert calculate_ssd(clean_image, adv_img) > 0
 
@@ -396,7 +396,7 @@ def test_13_attack_rgba_image():
 def test_14_ocr_mask_large_kernel(clean_image_and_target):
     """
     Coverage: F.max_pool2d in _build_text_like_mask.
-    Rationale: Large kernels can sometimes cause dimension mismatches or 
+    Rationale: Large kernels can sometimes cause dimension mismatches or
                out-of-bounds errors in padding logic.
     Expected Behavior: PyTorch pooling handles large kernels correctly; returns an image.
     """
@@ -405,7 +405,7 @@ def test_14_ocr_mask_large_kernel(clean_image_and_target):
     attacker = AttackVLMOCR(model, device="cpu")
     hp = {"steps": 1, "ocr_dilate_kernel": 100}
     adv_img = attacker.attack(clean_image, target_text, strength=0.5, hyperparameters=hp)
-    
+
     assert_valid_adv_image(adv_img)
     # Even with large kernel, at 1 step we expect some initialization change
     assert calculate_ssd(clean_image, adv_img) > 0
@@ -414,10 +414,10 @@ def test_14_ocr_mask_large_kernel(clean_image_and_target):
 def test_15_ocr_mask_zero_area(clean_image_and_target):
     """
     Coverage: Area-ratio thresholding in _build_text_like_mask.
-    Rationale: If the mask mean is > 0, the code enters a secondary thresholding 
+    Rationale: If the mask mean is > 0, the code enters a secondary thresholding
                block. Testing 0.0 forces this logic to its extreme limit.
     Expected Behavior: The mask is heavily pruned to only the highest gradient pixels.
-                       Even with a flat image, initialization noise and tiny gradient 
+                       Even with a flat image, initialization noise and tiny gradient
                        differences mean some perturbation usually persists.
     """
     clean_image, target_text = clean_image_and_target
@@ -425,9 +425,9 @@ def test_15_ocr_mask_zero_area(clean_image_and_target):
     attacker = AttackVLMOCR(model, device="cpu")
     hp = {"steps": 1, "ocr_max_area_ratio": 0.0}
     adv_img = attacker.attack(clean_image, target_text, strength=0.5, hyperparameters=hp)
-    
+
     assert_valid_adv_image(adv_img)
-    # Even with 0.0 area ratio, the logic (quantile 1.0) might 
+    # Even with 0.0 area ratio, the logic (quantile 1.0) might
     # still allow the very top-gradient pixel(s) to be perturbed.
     assert calculate_ssd(clean_image, adv_img) > 0
 
@@ -435,8 +435,8 @@ def test_15_ocr_mask_zero_area(clean_image_and_target):
 def test_16_ocr_mask_flat_image():
     """
     Coverage: AttackVLMOCR._build_text_like_mask gradient logic.
-    Significance: On a solid color image, all gradients are zero. This tests 
-                  if the Sobel filtering and `torch.quantile` logic handle 
+    Significance: On a solid color image, all gradients are zero. This tests
+                  if the Sobel filtering and `torch.quantile` logic handle
                   zero-variance inputs without crashing or producing NaNs.
     Expected Behavior: Returns a valid adversarial image (mask may be zeroed out).
     """
@@ -457,13 +457,13 @@ def test_16_ocr_mask_flat_image():
 def test_17_attack_invalid_image():
     """
     Coverage: _load_image_tensor entry point.
-    Rationale: Ensures the system fails predictably when provided with null data 
+    Rationale: Ensures the system fails predictably when provided with null data
                instead of crashing deep in the tensor logic.
     Expected Behavior: Raises AttributeError (when calling .convert() on None).
     """
     model = MockImageTargetModel()
     attacker = AttackVLMUntargeted(model, device="cpu")
-    with pytest.raises(AttributeError):
+    with pytest.raises(TypeError):
         attacker.attack(None, strength=0.5)
 
 
@@ -491,9 +491,9 @@ def test_18_attack_nan_loss(clean_image):
 def test_19_attack_extreme_eot_shift(clean_image):
     """
     Coverage: _eot_augment with torch.roll.
-    Significance: Tests if the Expectation over Transformation logic handles 
-                  shift values larger than the image dimensions. `torch.roll` 
-                  is circular, so this verifies that extreme values wrap around 
+    Significance: Tests if the Expectation over Transformation logic handles
+                  shift values larger than the image dimensions. `torch.roll`
+                  is circular, so this verifies that extreme values wrap around
                   rather than causing index errors.
     Expected Behavior: Executes successfully using circular wrapping for shifts.
     """
