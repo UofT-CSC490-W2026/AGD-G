@@ -1,6 +1,10 @@
 """
 Edge case tests for the AttackVLM class.
 
+Parametrized images: the five images used one solid white canvas, one solid black canvas,
+and three charts of different types (bubble, bar, pie) taken from our dataset—each padded
+to the model input size.
+
 This test suite provides comprehensive coverage (100%) of attackvlm.py through
 26 tests organized into 7 categories:
 
@@ -45,8 +49,6 @@ This test suite provides comprehensive coverage (100%) of attackvlm.py through
 7. ADVANCED FEATURE COVERAGE (Source Text Repulsion) - Tests 25-26
    - Test 25: Text attack with source_text - repel from original caption
    - Test 26: OCR attack with source_text - combines masking + source repulsion
-
-Total: 26 unique tests × 5 parametrized images = 106 test cases
 """
 
 import pytest
@@ -112,6 +114,7 @@ class MockTextTargetModel(MockImageTargetModel):
 _TESTS_DIR = Path(__file__).resolve().parent
 
 # Logical ids for parametrized tests and reporting (files live next to this module).
+# The set is: all-white, all-black, plus three dataset charts (bubble / bar / pie)—see module docstring.
 IMAGE_REFS = [
     "padded_bubble_2.png",
     "padded_clean_data_viz.png",
@@ -319,10 +322,8 @@ def test_09_attack_large_strength(clean_image):
 def test_10_attack_size_zero():
     """
     Coverage: _load_image_tensor resizing.
-    Significance: Tests the robustness of the preprocessing pipeline against empty 
-                  data inputs. It ensures that a lack of pixel data doesn't trigger 
-                  division-by-zero or memory allocation errors, allowing the system 
-                  to gracefully handle malformed image files.
+    Rationale: Checks that a 0×0 image does not trigger a division-by-zero or
+               memory allocation error in the resize step.
     Expected Behavior: Returns a valid 512x512 adversarial image.
     """
     model = MockImageTargetModel()
@@ -339,10 +340,8 @@ def test_10_attack_size_zero():
 def test_11_attack_grayscale():
     """
     Coverage: _load_image_tensor conversion.
-    Significance: Many vision-language models (like CLIP) are strictly trained on 
-                  3-channel RGB data. This test ensures the library automatically 
-                  bridges the gap for single-channel formats without user intervention, 
-                  maintaining compatibility with standard model interfaces.
+    Rationale: The model expects 3-channel input; this verifies that a single-channel
+               image is converted to RGB before tensor conversion.
     Expected Behavior: Returns a valid 3-channel 512x512 adversarial image.
     """
     model = MockImageTargetModel()
@@ -358,10 +357,9 @@ def test_11_attack_grayscale():
 def test_12_attack_extreme_aspect_ratio():
     """
     Coverage: _load_image_tensor resizing logic.
-    Significance: Highlights the "semantic squashing" effect of the fixed 512x512 
-                  input size. It ensures the implementation remains numerically 
-                  stable even when image content is heavily distorted during 
-                  normalization for the target model.
+    Rationale: A large width-to-height mismatch produces heavy distortion when
+               resizing to 512×512; this checks that the resize step remains
+               numerically stable at that extreme.
     Expected Behavior: Returns a valid 512x512 adversarial image.
     """
     model = MockImageTargetModel()
@@ -377,10 +375,8 @@ def test_12_attack_extreme_aspect_ratio():
 def test_13_attack_rgba_image():
     """
     Coverage: _load_image_tensor conversion from RGBA.
-    Significance: Ensures that images with alpha channels (like transparent PNGs) 
-                  are flattened to RGB correctly. This verifies that the 4th 
-                  channel is stripped before tensor conversion, preventing 
-                  shape mismatches in the model.
+    Rationale: Checks that the alpha channel is stripped before tensor conversion,
+               preventing shape mismatches when the model expects 3-channel input.
     Expected Behavior: Returns a valid 3-channel 512x512 RGB image.
     """
     model = MockImageTargetModel()
@@ -475,10 +471,9 @@ def test_17_attack_invalid_image():
 def test_18_attack_nan_loss(clean_image):
     """
     Coverage: _run_attack optimization loop robustness.
-    Significance: Tests how the optimizer reacts if the model returns NaN. 
-                  While the attack might fail to find a direction, it should 
-                  not crash the entire process. It verifies that `delta.grad` 
-                  manipulation remains safe.
+    Rationale: Checks that a NaN loss does not crash the optimizer or produce
+               an invalid output; `delta.grad` manipulation must remain safe
+               when gradients are undefined.
     Expected Behavior: Executes without crashing; output is a valid image.
     """
     class NaNModel(MockImageTargetModel):
@@ -514,10 +509,8 @@ def test_19_attack_extreme_eot_shift(clean_image):
 def test_20_attack_empty_text(clean_image):
     """
     Coverage: AttackVLMText.setup with empty string.
-    Significance: Tests the "boundary of meaning" by ensuring the system doesn't 
-                  crash when provided with no semantic guidance. It verifies that 
-                  the underlying model's embedding function and the subsequent 
-                  loss calculation handle null strings gracefully.
+    Rationale: Checks that the model's text-embedding path and the subsequent
+               loss calculation handle an empty string without error.
     Expected Behavior: Returns a valid 512x512 adversarial image.
     """
     model = MockTextTargetModel()
