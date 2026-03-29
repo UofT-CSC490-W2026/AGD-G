@@ -8,3 +8,5 @@ source =
 [report]
 omit =
     testing/*
+    core/interfaces.py
+    __init__.py
