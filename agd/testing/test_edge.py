@@ -55,6 +55,7 @@ import pytest
 import torch
 import numpy as np
 from PIL import Image
+from collections.abc import Sequence
 from agd.core.attacks.attackvlm import (
     AttackVLMUntargeted,
     AttackVLMImage,
@@ -685,3 +686,87 @@ def test_26_ocr_attack_with_source_text(clean_image_and_target):
 
     assert_valid_adv_image(adv_img)
     assert calculate_ssd(clean_image, adv_img) > 0
+
+# ==============================================================================
+# GROUP 8: BATCH MODE TESTS - Tests 27-30
+# ==============================================================================
+
+# 27. Positive Test: Single image (not a batch)
+def test_27_single_image_positive(clean_image):
+    """
+    Coverage: AttackVLMUntargeted._run_attack loop.
+    Rationale: Ensures the base optimization loop can handle a single Image,
+               not inside a batch container (Sequence)
+    Expected Behavior: Returns a PIL Image of size 512x512 that is different from
+                       the original (due to initialized delta and optimization).
+    """
+    model = MockImageTargetModel()
+    attacker = AttackVLMUntargeted(model, device="cpu")
+    # Small steps for speed
+    adv_img = attacker.attack(clean_image, strength=0.5, hyperparameters={"steps": 2})
+
+    assert_valid_adv_image(adv_img)
+
+    # Assert that the image actually changed from the clean input
+    assert calculate_ssd(clean_image, adv_img) > 0
+
+# 28. Positive Test: Batch containing no images
+def test_28_batch_empty_positive():
+    """
+    Coverage: AttackVLMUntargeted._run_attack loop.
+    Rationale: Ensures the base optimization loop can handle an empty batch
+    Expected Behavior: Returns an empty Sequence
+    """
+    model = MockImageTargetModel()
+    attacker = AttackVLMUntargeted(model, device="cpu")
+    batch = []
+    # Small steps for speed
+    adv_img = attacker.attack(batch, strength=0.5, hyperparameters={"steps": 2})
+
+    assert isinstance(adv_img, Sequence)
+    assert len(adv_img) == 0
+
+# 29. Positive Test: Batch containing one image
+def test_29_batch_one_positive(clean_image):
+    """
+    Coverage: AttackVLMUntargeted._run_attack loop.
+    Rationale: Ensures the base optimization loop can handle a batch with only
+               one image, without collapsing the batch to a bare Image.Image.
+    Expected Behavior: Returns a Sequence containing a PIL Image of size 512x512
+                       that is different from the original. Not a bare image,
+                       but a one-element list.
+    """
+    model = MockImageTargetModel()
+    attacker = AttackVLMUntargeted(model, device="cpu")
+    batch = [clean_image]
+    # Small steps for speed
+    adv_img = attacker.attack(batch, strength=0.5, hyperparameters={"steps": 2})
+
+    assert isinstance(adv_img, Sequence)
+    assert len(adv_img) == len(batch)
+    for img in adv_img:
+        assert_valid_adv_image(img)
+        # Assert that each image actually changed from the clean input
+        assert calculate_ssd(clean_image, img) > 0
+
+# 30. Positive Test: Batch containing multiple images
+def test_30_batch_multiple_positive(clean_image):
+    """
+    Coverage: AttackVLMUntargeted._run_attack loop.
+    Rationale: Ensures the base optimization loop can handle a batch with more
+               than one image.
+    Expected Behavior: Returns a Sequence containing PIL Images of size 512x512
+                       that is different from the original.
+    """
+    model = MockImageTargetModel()
+    attacker = AttackVLMUntargeted(model, device="cpu")
+    batch = [clean_image for _ in range(4)]
+    # Small steps for speed
+    adv_img = attacker.attack(batch, strength=0.5, hyperparameters={"steps": 2})
+
+    assert isinstance(adv_img, Sequence)
+    assert len(adv_img) == len(batch)
+    for img in adv_img:
+        assert_valid_adv_image(img)
+        # Assert that each image actually changed from the clean input
+        assert calculate_ssd(clean_image, img) > 0
