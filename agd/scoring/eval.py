@@ -56,5 +56,5 @@ def evaluate_similarity(model, output_text: str, text_a: str, text_b: str, cutof
     return determine_winner(score_a, score_b, cutoff_score, margin)
 
 if __name__ == "__main__":
-    import doctest
-    doctest.testmod(verbose=True)
+    import doctest # pragma: no cover
+    doctest.testmod(verbose=True) # pragma: no cover

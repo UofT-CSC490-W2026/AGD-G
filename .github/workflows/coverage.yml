@@ -3,7 +3,7 @@ name: Python Coverage
 on:
   pull_request:
     paths:
-      - ".github/workflows/modal-coverage.yml"
+      - ".github/workflows/coverage.yml"
       - ".github/scripts/update_readme_coverage.py"
       - "README.md"
       - "requirements.txt"
@@ -11,7 +11,7 @@ on:
       - "modal/**"
   push:
     paths:
-      - ".github/workflows/modal-coverage.yml"
+      - ".github/workflows/coverage.yml"
       - ".github/scripts/update_readme_coverage.py"
       - "README.md"
       - "requirements.txt"
@@ -48,12 +48,8 @@ jobs:
             --cov=data_pipeline.eval \
             --cov=data_pipeline.main \
             --cov=data_pipeline.preprocess_charts \
-            --cov-report=term-missing \
-            --cov-report=xml:coverage.xml \
-            --cov-report=json:coverage.json \
-            --cov-report=markdown:coverage.md \
-            --cov-report=markdown-append:${GITHUB_STEP_SUMMARY} \
             .
+          mv .coverage ../.coverage.modal
 
       - name: Run AGD tests with coverage
         working-directory: agd
@@ -62,29 +58,30 @@ jobs:
             --cov=agd.scoring.eval \
             --cov=agd.core.attack \
             --cov=agd.core.models.clip_target \
-            --cov-report=term-missing \
-            --cov-report=xml:coverage.xml \
-            --cov-report=json:coverage.json \
-            --cov-report=markdown:coverage.md \
-            --cov-report=markdown-append:${GITHUB_STEP_SUMMARY} \
             .
+          mv .coverage ../.coverage.agd
+
+      - name: Coverage report
+        run: |
+          python -m coverage combine .coverage.modal .coverage.agd
+          python -m coverage report -m
+          python -m coverage xml -o coverage.xml
+          python -m coverage json -o coverage.json
+          python -m coverage report -m --format=markdown > coverage.md
+          cat coverage.md >> $GITHUB_STEP_SUMMARY
 
       - name: Update README coverage blocks
         run: |
-          python .github/scripts/update_readme_coverage.py modal modal/coverage.json README.md
-          python .github/scripts/update_readme_coverage.py agd agd/coverage.json README.md
+          python .github/scripts/update_readme_coverage.py project coverage.json README.md
 
       - name: Upload coverage artifact
         uses: actions/upload-artifact@v4
         with:
           name: python-coverage
           path: |
-            modal/coverage.json
-            modal/coverage.xml
-            modal/coverage.md
-            agd/coverage.json
-            agd/coverage.xml
-            agd/coverage.md
+            coverage.json
+            coverage.xml
+            coverage.md
 
       - name: Commit README update on default branch
         if: github.event_name == 'push' && github.ref_name == github.event.repository.default_branch
@@ -108,13 +105,7 @@ jobs:
               "<!-- python-coverage-comment -->",
               "## Python Coverage",
               "",
-              "### modal/",
-              "",
-              fs.readFileSync("modal/coverage.md", "utf8"),
-              "",
-              "### agd/",
-              "",
-              fs.readFileSync("agd/coverage.md", "utf8"),
+              fs.readFileSync("coverage.md", "utf8"),
             ].join("\n");
             const { owner, repo } = context.repo;
             const issue_number = context.issue.number;

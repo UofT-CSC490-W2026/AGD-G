@@ -1,21 +1,11 @@
 # AGD-G
 Group-1 Project
 
-## CI Status
+<!-- coverage:project:start -->
+![PROJECT coverage](https://img.shields.io/badge/coverage-99.07%25-brightgreen)
 
-<!-- coverage:modal:start -->
-![MODAL coverage](https://img.shields.io/badge/modal%20coverage-98.99%25-brightgreen)
-
-`modal/` automated line coverage: `98.99%`
-<!-- coverage:modal:end -->
-
-<!-- coverage:agd:start -->
-![AGD coverage](https://img.shields.io/badge/agd%20coverage-96.05%25-brightgreen)
-
-`agd/` automated line coverage: `96.05%`
-<!-- coverage:agd:end -->
-
-`terraform/` runs `terraform fmt -check` and `terraform validate`. Coverage does not apply until Terraform tests are added.
+Overall automated line coverage: `99.07%`
+<!-- coverage:project:end -->
 
 ## Terraform usage
 

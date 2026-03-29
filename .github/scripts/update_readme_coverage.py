@@ -23,12 +23,21 @@ def build_block(area: str, percent: float) -> str:
     end_marker = f"<!-- coverage:{area}:end -->"
     rounded = f"{percent:.2f}"
     color = badge_color(percent)
+    
+    if area == "project":
+        title = "PROJECT"
+        badge_label = "coverage"
+        description = f"Overall automated line coverage: `{rounded}%`"
+    else:
+        badge_label = f"{area} coverage"
+        description = f"`{area}/` automated line coverage: `{rounded}%`"
+        
     return "\n".join(
         [
             start_marker,
-            f"![{title} coverage](https://img.shields.io/badge/{area}%20coverage-{rounded}%25-{color})",
+            f"![{title} coverage](https://img.shields.io/badge/{badge_label.replace(' ', '%20')}-{rounded}%25-{color})",
             "",
-            f"`{area}/` automated line coverage: `{rounded}%`",
+            description,
             end_marker,
         ]
     )
