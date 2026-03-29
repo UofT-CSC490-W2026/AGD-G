@@ -2,7 +2,10 @@
 Modal script to run the test attack. Not set up for AWS integration or production at all.
 """
 import modal
-from core.attack import attack
+try:
+    from agd.core.attack import attack
+except (ImportError, ModuleNotFoundError):
+    from core.attack import attack
 
 modal_image = (
     modal.Image.debian_slim(python_version="3.11")

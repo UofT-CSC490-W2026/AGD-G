@@ -32,3 +32,4 @@ agd/*.jpg
 [._]*.s[a-v][a-z]
 .vscode/settings.json
 coverage.lcov
+restore.py
