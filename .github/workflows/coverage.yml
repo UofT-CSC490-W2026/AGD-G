@@ -58,7 +58,9 @@ jobs:
             --cov=agd.scoring.eval \
             --cov=agd.core.attack \
             --cov=agd.core.models.clip_target \
-            .
+            --cov=agd/core/attacks/attackvlm.py  \
+            --cov=agd/core/models/clip_target.py \
+            --cov=agd/attackvlm_adapter.py  \
           mv .coverage ../.coverage.agd
 
       - name: Coverage report
