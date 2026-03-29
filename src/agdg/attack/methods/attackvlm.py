@@ -28,7 +28,7 @@ from abc import ABC, abstractmethod
 import logging
 import tempfile
 from typing import Dict, List, Optional, Tuple
-from collections.abc import Sequence
+import re
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -198,7 +198,10 @@ class _AttackVLM(ABC):
 
     def _load_image_tensor(self, image: Image.Image) -> torch.Tensor:
         """
-        Load an image as a Tensor after converting to 512x512 float [0-1] format
+        Load an image as a Tensor in float [0-1] format at 512x512.
+        CLIP's _preprocess handles the differentiable resize to the model's
+        native resolution (336x336) internally, so gradients still flow
+        correctly while the output stays readable for charts/graphs.
         """
         image = image.convert("RGB").resize((512, 512))
         clean_np = np.array(image).astype(np.float32) / 255.0
@@ -452,3 +455,277 @@ class AttackVLMOCR(AttackVLMText, TextAttackMethod):
             mask = F.max_pool2d(mask, kernel_size=3, stride=1, padding=1)
 
         return mask.clamp(0, 1)
+
+
+# ====================================================================================================
+# Stage 2: Query-based RGF refinement
+
+class QueryRefinement:
+    """
+    Stage 2 of the AttackVLM pipeline: query-based refinement using
+    Random Gradient-Free (RGF) estimation. Refines a transfer-attack
+    adversarial image by querying the target VLM and estimating
+    pseudo-gradients from its text responses.
+
+    The algorithm:
+      1. For each step, query the VLM with the current adversarial image.
+      2. Generate Rademacher noise perturbations and query the VLM for each.
+      3. Encode all VLM responses with CLIP text encoder.
+      4. Estimate a pseudo-gradient from the directional improvement toward
+         the target text in CLIP embedding space.
+      5. Update the perturbation with the sign of the pseudo-gradient.
+
+    Reference: Zhao et al., "On Evaluating Adversarial Robustness of
+    Large Vision-Language Models", NeurIPS 2023.
+    """
+    def __init__(self, clip_text_model, device="cuda"):
+        self.clip_model = clip_text_model
+        self.device = device
+
+    def refine(
+        self,
+        clean: Image.Image,
+        adv: Image.Image,
+        target_text: str,
+        vlm_fn,
+        question: str = "",
+        source_text: Optional[str] = None,
+        target_answer: Optional[str] = None,
+        source_answer: Optional[str] = None,
+        eps: float = 8 / 255,
+        sigma: float = 4 / 255,
+        alpha: float = 0.5 / 255,
+        steps: int = 8,
+        num_query: int = 100,
+        num_sub_query: int = 25,
+        repel_source_text: float = 0.5,
+        image_l2_penalty: float = 0.05,
+        ocr_edge_quantile: float = 0.88,
+        ocr_std_quantile: float = 0.70,
+        ocr_dilate_kernel: int = 7,
+        ocr_max_area_ratio: float = 0.22,
+        smooth_kernel: int = 5,
+    ) -> Image.Image:
+        """
+        Refine an adversarial image using query-based RGF estimation.
+
+        Args:
+            clean: Original clean image.
+            adv: Adversarial image from Stage 1 (transfer attack).
+            target_text: Target text the VLM should produce.
+            vlm_fn: Callable (PIL.Image, str) -> str that queries the VLM.
+            question: The question to ask the VLM about the image.
+            source_text: Optional source/correct answer text to repel.
+            eps: L-infinity perturbation budget (pixel scale [0,1]).
+            sigma: Noise scale for RGF estimation.
+            alpha: Step size for perturbation update.
+            steps: Number of RGF refinement steps.
+            num_query: Total number of noise queries per step.
+            num_sub_query: Sub-batch size for noise queries.
+
+        Returns:
+            Refined adversarial image as PIL Image.
+        """
+        clean_t = self._to_tensor(clean)
+        adv_t = self._to_tensor(adv)
+        delta = adv_t - clean_t
+
+        with torch.no_grad():
+            target_embed = self.clip_model.embed_text(target_text, detach=True)
+            source_embed = (
+                self.clip_model.embed_text(source_text, detach=True)
+                if source_text else None
+            )
+
+        mask = AttackVLMOCR._build_text_like_mask(
+            clean_t,
+            edge_quantile=ocr_edge_quantile,
+            std_quantile=ocr_std_quantile,
+            dilate_kernel=ocr_dilate_kernel,
+            max_area_ratio=ocr_max_area_ratio,
+        )
+        delta = (delta * mask).clamp(-eps, eps)
+        best_delta = delta.clone()
+        best_score = float("-inf")
+        best_response = ""
+
+        for step in tqdm(range(steps), desc="RGF Refinement"):
+            logger.info("RGF step %d/%d: querying current adversarial image", step + 1, steps)
+            adv_t = (clean_t + delta).clamp(0, 1)
+            adv_pil = self._to_pil(adv_t)
+            adv_response = vlm_fn(adv_pil, question)
+
+            with torch.no_grad():
+                adv_text_embed = self.clip_model.embed_text(adv_response, detach=True)
+                current_score = self._score_response(
+                    adv_text_embed,
+                    target_embed,
+                    response_text=adv_response,
+                    target_answer=target_answer,
+                    source_answer=source_answer,
+                    source_embed=source_embed,
+                    repel_source_text=repel_source_text,
+                )
+                current_score = current_score - image_l2_penalty * self._delta_l2(
+                    delta, mask
+                )
+
+            if current_score.item() > best_score:
+                best_score = current_score.item()
+                best_delta = delta.clone()
+                best_response = adv_response
+                logger.info(
+                    "RGF step %d/%d: new best score %.4f response=%r",
+                    step + 1,
+                    steps,
+                    best_score,
+                    adv_response,
+                )
+
+            pseudo_grad = torch.zeros_like(delta)
+
+            for sub_start in range(0, num_query, num_sub_query):
+                sub_size = min(num_sub_query, num_query - sub_start)
+                logger.info(
+                    "RGF step %d/%d: query batch %d-%d of %d",
+                    step + 1,
+                    steps,
+                    sub_start + 1,
+                    sub_start + sub_size,
+                    num_query,
+                )
+                noise = torch.randn(
+                    sub_size, *delta.shape[1:], device=self.device
+                ).sign() * mask
+
+                coefficients = []
+                for i in range(sub_size):
+                    perturbed_t = (adv_t + sigma * noise[i:i+1]).clamp(0, 1)
+                    perturbed_pil = self._to_pil(perturbed_t)
+                    response = vlm_fn(perturbed_pil, question)
+
+                    with torch.no_grad():
+                        response_embed = self.clip_model.embed_text(
+                            response, detach=True
+                        )
+                        perturbed_score = self._score_response(
+                            response_embed,
+                            target_embed,
+                            response_text=response,
+                            target_answer=target_answer,
+                            source_answer=source_answer,
+                            source_embed=source_embed,
+                            repel_source_text=repel_source_text,
+                        )
+                        perturbed_delta = (
+                            delta + sigma * noise[i:i+1]
+                        ).clamp(-eps, eps) * mask
+                        perturbed_score = perturbed_score - image_l2_penalty * (
+                            self._delta_l2(perturbed_delta, mask)
+                        )
+                        coeff = perturbed_score - current_score
+                        coefficients.append(coeff)
+
+                coefficients = torch.stack(coefficients).view(-1, 1, 1, 1)
+                pseudo_grad += (coefficients * noise / sigma).sum(
+                    dim=0, keepdim=True
+                )
+
+            pseudo_grad = pseudo_grad / num_query
+            pseudo_grad = self._smooth(pseudo_grad, smooth_kernel) * mask
+            delta = (delta + alpha * pseudo_grad.sign()).clamp(-eps, eps)
+            delta = delta * mask
+            delta = (clean_t + delta).clamp(0, 1) - clean_t
+
+            logger.info("RGF step %d/%d done", step + 1, steps)
+
+        logger.info("RGF best response retained: %r", best_response)
+        adv_t = (clean_t + best_delta).clamp(0, 1)
+        return self._to_pil(adv_t)
+
+    def _score_response(
+        self,
+        response_embed: torch.Tensor,
+        target_embed: torch.Tensor,
+        response_text: str,
+        target_answer: Optional[str] = None,
+        source_answer: Optional[str] = None,
+        source_embed: Optional[torch.Tensor] = None,
+        repel_source_text: float = 0.5,
+    ) -> torch.Tensor:
+        score = self.clip_model(response_embed, target_embed)
+        if source_embed is not None:
+            score = score - repel_source_text * self.clip_model(
+                response_embed, source_embed
+            )
+        score = score + self._lexical_score(
+            response_text,
+            target_answer=target_answer,
+            source_answer=source_answer,
+            device=response_embed.device,
+            dtype=score.dtype,
+        )
+        return score
+
+    @staticmethod
+    def _normalize_text(text: str) -> str:
+        return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", text.lower())).strip()
+
+    @classmethod
+    def _lexical_score(
+        cls,
+        response_text: str,
+        target_answer: Optional[str],
+        source_answer: Optional[str],
+        device,
+        dtype,
+    ) -> torch.Tensor:
+        response_norm = cls._normalize_text(response_text)
+        score = 0.0
+
+        if target_answer:
+            target_norm = cls._normalize_text(target_answer)
+            if response_norm == target_norm:
+                score += 3.0
+            elif target_norm and target_norm in response_norm:
+                score += 1.5
+
+        if source_answer:
+            source_norm = cls._normalize_text(source_answer)
+            if response_norm == source_norm:
+                score -= 3.0
+            elif source_norm and source_norm in response_norm:
+                score -= 1.5
+
+        return torch.tensor(score, device=device, dtype=dtype)
+
+    @staticmethod
+    def _smooth(tensor: torch.Tensor, kernel_size: int) -> torch.Tensor:
+        kernel_size = max(1, int(kernel_size))
+        if kernel_size == 1:
+            return tensor
+        if kernel_size % 2 == 0:
+            kernel_size += 1
+        return F.avg_pool2d(
+            tensor,
+            kernel_size=kernel_size,
+            stride=1,
+            padding=kernel_size // 2,
+        )
+
+    @staticmethod
+    def _delta_l2(delta: torch.Tensor, mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+        if mask is not None:
+            denom = mask.sum().clamp_min(1.0)
+            return ((delta * mask) ** 2).sum() / denom
+        return (delta ** 2).mean()
+
+    def _to_tensor(self, image):
+        image = image.convert("RGB").resize((512, 512))
+        arr = np.array(image).astype(np.float32) / 255.0
+        return torch.from_numpy(arr).permute(2, 0, 1).unsqueeze(0).to(self.device)
+
+    def _to_pil(self, tensor):
+        arr = tensor[0].cpu().permute(1, 2, 0).numpy()
+        arr = (arr * 255).round().clip(0, 255).astype(np.uint8)
+        return Image.fromarray(arr)
