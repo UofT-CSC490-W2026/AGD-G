@@ -27,7 +27,7 @@ DEFAULT_MODEL_ID = os.environ.get("AGDG_VLM_MODEL_ID", "llava-hf/llava-1.5-7b-hf
 DEFAULT_ATTACKER = os.environ.get("AGDG_ATTACK_METHOD", "targeted_text")
 DEFAULT_SURROGATE = os.environ.get("AGDG_ATTACK_SURROGATE", "clip_text_patch")
 DEFAULT_ALLOWED_ORIGINS = (
-    "http://localhost:5500,http://127.0.0.1:5500,http://[::1]:5500,https://avantitandon.github.io"
+    "http://localhost:5500,http://127.0.0.1:5500,http://[::1]:5500,https://avantitandon.github.io,https://uoft-csc490-w2026.github.io"
 )
 DEFAULT_WEB_ENV = {
     "AGDG_ALLOWED_ORIGINS": DEFAULT_ALLOWED_ORIGINS,

@@ -163,6 +163,18 @@ The frontend now calls `POST /attack` with a multipart form upload and expects:
 - `clean_answer`
 - `adversarial_answer`
 
+## Automated Modal deploys
+
+The backend can also be deployed from GitHub Actions using [`.github/workflows/modal-deploy.yml`](/Users/Avanti3008/Documents/GitHub/AGD-G/.github/workflows/modal-deploy.yml).
+
+Set these repository secrets before using it:
+
+- `MODAL_TOKEN_ID`
+- `MODAL_TOKEN_SECRET`
+- `MODAL_ENVIRONMENT` (optional if your workspace only uses one environment)
+
+After that, pushes to `main` and `pages-preview` can redeploy `modal_run/web_api.py`, and you can also trigger the workflow manually from the Actions tab.
+
 ## Command-line access to RDS
 
 Install `postgresql`, replace `...` with the database password, and access the database locally:

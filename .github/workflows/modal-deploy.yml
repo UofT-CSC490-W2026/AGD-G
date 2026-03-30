@@ -1,0 +1,50 @@
+name: Deploy Modal Backend
+
+on:
+  push:
+    branches:
+      - main
+      - pages-preview
+      - pages-preview-2
+    paths:
+      - ".github/workflows/modal-deploy.yml"
+      - "modal_run/**"
+      - "src/agdg/**"
+      - "pyproject.toml"
+      - "requirements.txt"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: modal-deploy-${{ github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+      MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+      MODAL_ENVIRONMENT: ${{ secrets.MODAL_ENVIRONMENT }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Modal CLI
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install modal
+
+      - name: Verify Modal auth
+        run: modal token info
+
+      - name: Deploy backend
+        run: modal deploy modal_run/web_api.py

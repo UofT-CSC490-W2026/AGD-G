@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - pages-preview
+      - pages-preview-2
     paths:
       - ".github/workflows/pages.yml"
       - "frontend/**"
