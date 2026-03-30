@@ -1,5 +1,5 @@
 resource "aws_s3_bucket" "tf_state" {
-  bucket = "agdg-terraform-state-prod-v2"
+  bucket        = "agdg-terraform-state-prod-v2"
   force_destroy = false
 
   lifecycle {
