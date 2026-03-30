@@ -23,5 +23,8 @@ dependencies = [
 	"qwen-vl-utils",
 ]
 
+[project.scripts]
+agdg = "agdg.cli:main"
+
 [tool.setuptools.packages.find]
 where = ["src"]

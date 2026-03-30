@@ -17,19 +17,117 @@ to a human.
 **This project is intended solely for academic research into the robustness of multimodal models.
 It is not a tool for generating misinformation.**
 
-## How it works
+## Table of contents
+
+- [Getting started](#getting-started)
+- [Pipeline stages](#pipeline-stages)
+- [Datasets](#datasets)
+- [Models and references](#models-and-references)
+- [Environment variables](#environment-variables)
+- [Project structure](#project-structure)
+
+## Getting started
+
+There are two ways to run AGD-G. Both execute the same underlying code.
+
+| | **Local CLI (Docker)** | **Modal (cloud)** |
+|---|---|---|
+| GPU | Your own GPU via `--gpus all` | Modal-managed (H100, A10G) |
+| Storage | Local Postgres + MinIO (Docker Compose) | AWS RDS + S3 |
+| Accounts needed | None | Modal + AWS |
+| Invoke | `agdg <stage>` | `modal run modal_run/<stage>.py` |
+
+### Option A: Local CLI (Docker Compose)
+
+No cloud accounts needed. Runs on your own machine or HPC cluster.
+
+1. Install [Docker](https://docs.docker.com/get-docker/)
+2. Start the local infrastructure and install the package:
+
+```bash
+docker compose up -d
+cp .env.local.example .env.local
+pip install .
+```
+
+3. Run any pipeline stage (see [Pipeline stages](#pipeline-stages)):
+
+```bash
+agdg ingest --limit 10
+agdg target --strategy qwen --preview
+agdg attack --limit 5
+agdg evaluate --limit 5
+```
+
+You can also skip the local Python install and run everything inside Docker:
+
+```bash
+docker compose run --rm --profile app agdg <stage> [flags]
+
+# For GPU stages (requires nvidia-container-toolkit)
+docker compose run --rm --profile app --gpus all agdg attack --limit 5
+```
+
+For HPC clusters, the Dockerfile converts to Singularity:
+`singularity build agdg.sif docker-daemon://agdg:latest`
+
+### Option B: Modal (cloud GPU)
+
+1. Create or join a [Modal](https://modal.com) workspace
+2. Install the Modal CLI and run `modal setup`
+3. Provision AWS infrastructure with Terraform (see `terraform/environments/dev`):
+
+```bash
+cd terraform/environments/dev && terraform init
+terraform apply \
+    -var=db_password='<a secure password>' \
+    -var=bucket_name=agd-dev-tyson \
+    -var=allowed_db_cidr_blocks='["138.51.0.0/16"]'
+```
+
+4. Create the required Modal secrets:
+
+```bash
+modal secret create aws \
+  AWS_ACCESS_KEY_ID=... \
+  AWS_SECRET_ACCESS_KEY=... \
+  AWS_DEFAULT_REGION=ca-central-1
+
+modal secret create aws-rds \
+  DB_PASSWORD=...
+
+modal secret create huggingface \
+  HF_TOKEN=...
+```
+
+5. Run any pipeline stage (see [Pipeline stages](#pipeline-stages)):
+
+```bash
+modal run modal_run/ingest.py
+modal run modal_run/target.py -- --strategy qwen
+modal run modal_run/attack.py
+modal run modal_run/evaluate.py -- --mode evaluate
+```
+
+Every `@app.function()` executes on Modal GPUs (H100 for target generation, A10G for attacks and
+evaluation). The CLI streams output to your terminal; `Ctrl-C` stops the remote job.
+
+## Pipeline stages
 
 The pipeline has six stages. Each stage is **idempotent** -- it skips rows that already have
-results, so re-running is safe. Every stage runs on [Modal](https://modal.com) for cloud GPU
-compute; the CLI streams output to your terminal and `Ctrl-C` stops the remote job.
+results, so re-running is safe.
 
 ### 1. Ingest
 
 Import chart images and QA pairs from three HuggingFace datasets, upload raw PNGs to S3, and
 insert metadata rows into PostgreSQL.
 
-```
+```bash
+# Modal
 modal run modal_run/ingest.py
+
+# Local
+agdg ingest
 ```
 
 | Flag | Effect |
@@ -89,8 +187,12 @@ Apply an adversarial perturbation so the chart image looks unchanged to humans b
 as the target caption. The attack is PGD-style: iterative sign-gradient updates on a pixel-space
 perturbation, optimized against a surrogate model.
 
-```
+```bash
+# Modal
 modal run modal_run/attack.py
+
+# Local
+agdg attack
 ```
 
 | Flag | Effect |
@@ -151,6 +253,24 @@ modal run modal_run/evaluate.py --mode evaluate
 [clip]: https://arxiv.org/abs/2103.00020
 [llava]: https://arxiv.org/abs/2304.08485
 
+## Environment variables
+
+All storage configuration for the local CLI is driven by environment variables (see
+`.env.local.example`). When none are set, the code falls back to the production AWS defaults, so
+existing Modal deployments are unaffected.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AGDG_DB_HOST` | *(AWS RDS host)* | PostgreSQL host |
+| `AGDG_DB_PORT` | `5432` | PostgreSQL port |
+| `AGDG_DB_USER` | `modal_user` | PostgreSQL user |
+| `AGDG_DB_PASSWORD` | *(unset -- uses IAM token)* | When set, uses plain password auth |
+| `AGDG_DB_NAME` | `postgres` | Database name |
+| `AGDG_DB_SSLMODE` | `require` | SSL mode (`disable` for local) |
+| `AGDG_S3_ENDPOINT` | *(unset -- uses AWS)* | S3-compatible endpoint (e.g. `http://localhost:9000`) |
+| `AGDG_S3_BUCKET` | `agd-dev-tyson` | S3 bucket name |
+| `AGDG_S3_REGION` | `ca-central-1` | S3 region |
+
 ## Project structure
 
 ```
@@ -170,49 +290,8 @@ terraform/             AWS infrastructure (S3, RDS, IAM, security groups)
 docs/                  Background on adversarial-guided diffusion (AGD)
 ```
 
-## Setup
+### Direct access to RDS
 
-### Terraform (AWS infrastructure)
-
-1. Install Terraform and the AWS CLI
-2. `aws configure` -- enter credentials and set region to `ca-central-1`
-3. `cd terraform/environments/dev && terraform init`
-
-To apply changes:
-```
-terraform apply \
-    -var=db_password='<a secure password>' \
-    -var=bucket_name=agd-dev-tyson \
-    -var=allowed_db_cidr_blocks='["138.51.0.0/16"]'
-```
-
-The production environment (`terraform/environments/prod`) is currently unused.
-
-### Modal (GPU compute)
-
-1. Create or join a [Modal](https://modal.com) workspace
-2. Install the Modal CLI and run `modal setup`
-3. Create the required secrets:
-```
-modal secret create aws \
-  AWS_ACCESS_KEY_ID=... \
-  AWS_SECRET_ACCESS_KEY=... \
-  AWS_DEFAULT_REGION=ca-central-1
-
-modal secret create aws-rds \
-  DB_PASSWORD=...
-
-modal secret create huggingface \
-  HF_TOKEN=...
-```
-
-All pipeline stages are launched with `modal run <entrypoint>`. Every `@app.function()` executes
-on Modal GPUs (H100 for target generation, A10G for attacks and evaluation); the CLI streams
-output to your terminal. `Ctrl-C` stops the remote job.
-
-### Command-line access to RDS
-
-Install `postgresql` and connect directly:
-```
+```bash
 PGPASSWORD='...' psql -h agd-dev-postgres.cdsyi46ammw7.ca-central-1.rds.amazonaws.com -U postgres -d postgres -p 5432
 ```
