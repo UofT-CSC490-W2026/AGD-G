@@ -1,0 +1,223 @@
+:root {
+  --bg: #09111f;
+  --bg-accent: #13233c;
+  --panel: rgba(10, 20, 37, 0.82);
+  --panel-border: rgba(163, 191, 250, 0.16);
+  --text: #edf4ff;
+  --muted: #a9b9d4;
+  --accent: #66e0c2;
+  --accent-strong: #ffd166;
+  --danger: #ff8e72;
+  --shadow: 0 24px 80px rgba(0, 0, 0, 0.35);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  color: var(--text);
+  font-family: "Space Grotesk", sans-serif;
+  background:
+    radial-gradient(circle at top left, rgba(102, 224, 194, 0.18), transparent 30%),
+    radial-gradient(circle at top right, rgba(255, 209, 102, 0.14), transparent 25%),
+    linear-gradient(160deg, var(--bg), var(--bg-accent));
+}
+
+.page-shell {
+  width: min(1220px, calc(100vw - 2rem));
+  margin: 0 auto;
+  padding: 2.5rem 0 3rem;
+}
+
+.hero {
+  margin-bottom: 2rem;
+}
+
+.eyebrow {
+  margin: 0 0 0.5rem;
+  color: var(--accent);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.85rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.hero h1 {
+  margin: 0;
+  font-size: clamp(2.4rem, 6vw, 4.8rem);
+  line-height: 0.95;
+}
+
+.lede {
+  max-width: 58rem;
+  margin: 0.85rem 0 0;
+  color: var(--muted);
+  font-size: 1.05rem;
+}
+
+.status-row,
+.actions,
+.output-header,
+.images {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  align-items: stretch;
+}
+
+.status-row {
+  margin-top: 1.25rem;
+}
+
+.status-pill {
+  padding: 0.55rem 0.9rem;
+  border: 1px solid var(--panel-border);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.85rem;
+}
+
+.status-pill.subtle {
+  color: var(--muted);
+}
+
+.workspace {
+  display: grid;
+  grid-template-columns: 0.95fr 1.05fr;
+  gap: 1.25rem;
+}
+
+.panel {
+  backdrop-filter: blur(16px);
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: 24px;
+  box-shadow: var(--shadow);
+  padding: 1.25rem;
+}
+
+.field {
+  display: grid;
+  gap: 0.45rem;
+  margin-bottom: 1rem;
+}
+
+.field span,
+.output-header h2,
+.answer-card h3,
+.image-card h3 {
+  font-size: 0.92rem;
+  font-weight: 700;
+}
+
+.field textarea,
+.field input,
+button,
+pre {
+  font: inherit;
+}
+
+.field textarea,
+.field input {
+  width: 100%;
+  border: 1px solid rgba(173, 199, 255, 0.16);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+  padding: 0.9rem 1rem;
+}
+
+.field textarea:focus,
+.field input:focus {
+  outline: 2px solid rgba(102, 224, 194, 0.35);
+  border-color: rgba(102, 224, 194, 0.45);
+}
+
+button {
+  appearance: none;
+  border: 0;
+  border-radius: 999px;
+  padding: 0.85rem 1.25rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: transform 140ms ease, opacity 140ms ease, background 140ms ease;
+}
+
+button:hover {
+  transform: translateY(-1px);
+}
+
+#submit-button {
+  background: linear-gradient(135deg, var(--accent), #8cf0d8);
+  color: #05221d;
+}
+
+button.ghost {
+  background: transparent;
+  color: var(--text);
+  border: 1px solid rgba(173, 199, 255, 0.2);
+}
+
+button:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
+.output-header {
+  justify-content: space-between;
+  margin-bottom: 0.75rem;
+}
+
+.output-header h2,
+.answer-card h3,
+.image-card h3 {
+  margin: 0;
+}
+
+#request-meta {
+  color: var(--muted);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.82rem;
+}
+
+.answer-card,
+.image-card {
+  margin-top: 1rem;
+}
+
+.answer-card,
+.image-card {
+  padding: 1rem;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(173, 199, 255, 0.1);
+}
+
+.answer-card pre {
+  min-height: 180px;
+  margin: 0.8rem 0 0;
+  white-space: pre-wrap;
+  color: var(--text);
+  font-family: "IBM Plex Mono", monospace;
+  line-height: 1.6;
+}
+
+.image-card img {
+  width: 100%;
+  min-height: 240px;
+  margin-top: 0.8rem;
+  border-radius: 16px;
+  border: 1px solid rgba(173, 199, 255, 0.1);
+  background: rgba(255, 255, 255, 0.03);
+  object-fit: contain;
+}
+
+@media (max-width: 900px) {
+  .workspace {
+    grid-template-columns: 1fr;
+  }
+}

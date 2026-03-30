@@ -124,6 +124,45 @@ Now, just run your app with `modal run do_stuff.py`. Execution will start at the
 All `@app.function()` functions will be run on Modal servers and all CLI output will appear
 in your terminal. If you cancel the process with `Control-C`, it will stop on the Modal server too.
 
+## Web API + frontend
+
+This repo now includes a browser-facing Modal app at `modal_run/web_api.py` and a static frontend in `frontend/`.
+
+The current web flow is:
+
+- upload a chart image
+- provide the question/prompt and the target answer
+- run the adversarial attack on Modal
+- compare the clean and adversarial answers in the browser
+
+Deploy the backend:
+
+```bash
+modal deploy modal_run/web_api.py
+```
+
+Before deploying, set the CORS allowlist for your GitHub Pages site:
+
+```bash
+export AGDG_ALLOWED_ORIGINS="https://<username>.github.io,http://localhost:5500,http://127.0.0.1:5500"
+```
+
+If you want a quick smoke test without loading the full attack and evaluation models, keep mock mode enabled in `modal_run/web_api.py` or set:
+
+```bash
+export AGDG_FORCE_MOCK=1
+modal deploy modal_run/web_api.py
+```
+
+Then update `frontend/config.js` with the deployed Modal URL. The GitHub Pages workflow in `.github/workflows/pages.yml` publishes the contents of `frontend/` on pushes to `main`.
+
+The frontend now calls `POST /attack` with a multipart form upload and expects:
+
+- `original_image`
+- `adversarial_image`
+- `clean_answer`
+- `adversarial_answer`
+
 ## Command-line access to RDS
 
 Install `postgresql`, replace `...` with the database password, and access the database locally:

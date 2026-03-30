@@ -1,11 +1,14 @@
 accelerate
 boto3
 diffusers
+fastapi
 huggingface_hub
+httpx
 modal
 numpy
 pillow
 psycopg2-binary
+python-multipart
 pytest
 pytest-cov
 python-dotenv

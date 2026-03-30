@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AGD-G Chart Attack Lab</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="hero">
+        <p class="eyebrow">Static frontend, serverless backend</p>
+        <h1>AGD-G Chart Attack Lab</h1>
+        <p class="lede">
+          Upload a chart, enter the prompt and target answer, then generate the adversarial chart and answer.
+        </p>
+        <div class="status-row">
+          <span class="status-pill" id="api-status">Checking API...</span>
+          <span class="status-pill subtle" id="api-model">Mode: unknown</span>
+        </div>
+      </header>
+
+      <main class="workspace">
+        <section class="panel input-panel">
+          <form id="attack-form">
+            <label class="field">
+              <span>Chart image</span>
+              <input id="chart-image" type="file" accept="image/*" required />
+            </label>
+
+            <label class="field">
+              <span>Question / prompt</span>
+              <textarea
+                id="prompt"
+                rows="4"
+                placeholder="What is the graph about?"
+                required
+              ></textarea>
+            </label>
+
+            <label class="field">
+              <span>Target answer</span>
+              <textarea
+                id="target-response"
+                rows="3"
+                placeholder="What answer should the attacked chart push the model toward?"
+                required
+              ></textarea>
+            </label>
+
+            <div class="actions">
+              <button id="submit-button" type="submit">Run attack</button>
+              <button id="clear-button" type="button" class="ghost">Clear</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="panel output-panel">
+          <div class="output-header">
+            <h2>Adversarial Output</h2>
+            <span id="request-meta">Waiting for input</span>
+          </div>
+
+          <article class="image-card">
+            <h3>Adversarial chart</h3>
+            <img id="adversarial-image" alt="Adversarial chart preview" />
+          </article>
+
+          <article class="answer-card">
+            <h3>Answer</h3>
+            <pre id="adversarial-answer">No result yet.</pre>
+          </article>
+        </section>
+      </main>
+    </div>
+
+    <script src="./config.js"></script>
+    <script src="./app.js" type="module"></script>
+  </body>
+</html>

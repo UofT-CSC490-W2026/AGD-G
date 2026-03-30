@@ -35,6 +35,9 @@ class _FakeImageBuilder:
         assert found, f"add_local_python_source: package/module not found: {name}"
         return self
 
+    def env(self, *args, **kwargs):
+        return self
+
 
 class _FakeSecret:
     @staticmethod
@@ -75,6 +78,7 @@ def install_fake_modal():
     fake_modal.Secret = _FakeSecret
     fake_modal.Volume = _FakeVolume
     fake_modal.App = _FakeApp
+    fake_modal.asgi_app = lambda *args, **kwargs: (lambda func: func)
     sys.modules["modal"] = fake_modal
     return fake_modal
 
