@@ -1,94 +1,154 @@
 """
-Evaluate adversarial images by querying a VLM and computing similarity scores.
-Compares VLM response with clean caption (hidden_answer) and target text (attack_target_text).
+Evaluate adversarial charts by querying a VLM and measuring whether the answer
+is closer to the attack target than to the clean answer.
 """
-import logging
-import torch
-from sentence_transformers import SentenceTransformer
 
-from agdg.data_pipeline.aws import get_db_connection, get_image
-from agdg.scoring.similarity import evaluate_similarity, get_device
+from __future__ import annotations
+
+import logging
+
+from sentence_transformers import SentenceTransformer
+from psycopg2.extras import Json
+
 from agdg.data_pipeline.aws import rds, s3
+from agdg.data_pipeline.clean_response import (
+    DEFAULT_MODEL_ID,
+    DEFAULT_PROMPT,
+    generate_image_response,
+    load_vlm,
+)
+from agdg.scoring.similarity import determine_winner, get_device
 
 BATCH_SIZE = 100
 SIMILARITY_MODEL_ID = "all-MiniLM-L6-v2"
 
 
-def evaluate_all(model_name: str, max_rows: int = 0):
+def _similarity_scores(model, output_text: str, text_a: str, text_b: str) -> tuple[float, float]:
+    import torch.nn.functional as F
+
+    embeddings = model.encode([output_text, text_a, text_b], convert_to_tensor=True)
+    output_vec = embeddings[0].unsqueeze(0)
+    vec_a = embeddings[1].unsqueeze(0)
+    vec_b = embeddings[2].unsqueeze(0)
+    score_a = F.cosine_similarity(output_vec, vec_a).item()
+    score_b = F.cosine_similarity(output_vec, vec_b).item()
+    return score_a, score_b
+
+
+def evaluate_all(
+    model_name: str = DEFAULT_MODEL_ID,
+    max_rows: int = 0,
+    target_strategy: str | None = None,
+):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     log = logging.getLogger("evaluate")
 
     device = get_device()
-    log.info(f"Loading similarity model {SIMILARITY_MODEL_ID} on {device}...")
+    log.info("Loading similarity model %s on %s...", SIMILARITY_MODEL_ID, device)
     sim_model = SentenceTransformer(SIMILARITY_MODEL_ID, device=str(device))
+    processor, vlm, vlm_device, vlm_dtype = load_vlm(model_name)
 
-    # TODO: Load VLM model for output_answer generation
-    # For now, we assume output_answer might already be filled or we stub it.
-    # The user asked to pull image data from aws clean image caption, target image caption 
-    # and model generated response and compute similarity.
-
-    with get_db_connection() as conn:
+    with rds.get_db_connection() as conn:
         with conn.cursor() as cur:
-            limit = f"LIMIT {max_rows}" if max_rows > 0 else ""
-            # We need hidden_answer (clean), attack_target_text (target), and output_answer (response)
-            cur.execute(f"""
-                SELECT id, hidden_answer, attack_target_text, output_answer
-                FROM samples
-                WHERE adversarial_graph IS NOT NULL
-                  AND output_answer IS NOT NULL
-                  AND similarity_winner IS NULL
-                ORDER BY id
-                {limit}
-            """)
+            limit_clause = "LIMIT %s" if max_rows > 0 else ""
+            strategy_clause = "AND ta.target_strategy = %s" if target_strategy else ""
+            params = [model_name]
+            if target_strategy:
+                params.append(target_strategy)
+            if max_rows > 0:
+                params.append(max_rows)
+            cur.execute(
+                f"""
+                SELECT
+                    ac.id,
+                    ca.clean_answer,
+                    ta.target_answer,
+                    ac.adversarial_chart
+                FROM adversarial_charts ac
+                JOIN target_answers ta ON ta.id = ac.target_answer_id
+                JOIN clean_answers ca ON ca.id = ta.clean_answer_id
+                LEFT JOIN adversarial_answers aa
+                  ON aa.adversarial_chart_id = ac.id
+                 AND aa.adversarial_answer_model = %s
+                WHERE aa.id IS NULL
+                  {strategy_clause}
+                ORDER BY ac.id
+                {limit_clause}
+                """,
+                tuple(params),
+            )
             rows = cur.fetchall()
 
-    log.info(f"Found {len(rows)} samples to score similarity")
-
+    log.info("Found %s adversarial charts to evaluate", len(rows))
     if not rows:
         return {"evaluated": 0}
 
     evaluated = 0
+    succeeded = 0
+    failed = 0
     winners = {"A": 0, "B": 0, "Tie": 0, "Neither": 0}
 
     with rds.get_db_connection() as conn:
         with conn.cursor() as cur:
-            for sid, clean_caption, target_text, output_answer in rows:
-                if not output_answer or not clean_caption or not target_text:
-                    log.warning(f"Sample {sid} missing required text for similarity scoring")
-                    continue
+            for adversarial_chart_id, clean_answer, target_answer, adversarial_chart in rows:
+                try:
+                    output_answer = generate_image_response(
+                        processor=processor,
+                        model=vlm,
+                        model_id=model_name,
+                        image_bytes=s3.get_image(adversarial_chart),
+                        prompt=DEFAULT_PROMPT,
+                        device=vlm_device,
+                        dtype=vlm_dtype,
+                    )
+                    score_a, score_b = _similarity_scores(
+                        sim_model,
+                        output_answer,
+                        clean_answer,
+                        target_answer,
+                    )
+                    winner = determine_winner(score_a, score_b)
+                    attack_succeeded = winner == "B"
+                    cur.execute(
+                        """
+                        INSERT INTO adversarial_answers (
+                            adversarial_chart_id,
+                            adversarial_answer_model,
+                            answer_text,
+                            attack_succeeded,
+                            eval_meta
+                        )
+                        VALUES (%s, %s, %s, %s, %s)
+                        ON CONFLICT (adversarial_chart_id, adversarial_answer_model) DO NOTHING
+                        """,
+                        (
+                            adversarial_chart_id,
+                            model_name,
+                            output_answer,
+                            attack_succeeded,
+                            Json({
+                                "winner": winner,
+                                "score_clean": score_a,
+                                "score_target": score_b,
+                            }),
+                        ),
+                    )
+                    winners[winner] = winners.get(winner, 0) + 1
+                    succeeded += int(attack_succeeded)
+                    failed += int(not attack_succeeded)
+                    evaluated += 1
+                    if evaluated % BATCH_SIZE == 0:
+                        conn.commit()
+                        log.info("  Evaluated %s/%s", evaluated, len(rows))
+                except Exception as exc:
+                    log.error("Error evaluating adversarial_chart_id=%s: %s", adversarial_chart_id, exc)
 
-                # evaluate_similarity(model, output_text, text_a, text_b)
-                # A = clean_caption, B = target_text
-                winner = evaluate_similarity(
-                    sim_model, 
-                    output_answer, 
-                    clean_caption, 
-                    target_text
-                )
-
-                cur.execute(
-                    """
-                    UPDATE samples
-                    SET similarity_winner = %s
-                    WHERE id = %s
-                    """,
-                    (winner, sid),
-                )
-                
-                winners[winner] = winners.get(winner, 0) + 1
-                evaluated += 1
-
-                if evaluated % BATCH_SIZE == 0:
-                    conn.commit()
-                    log.info(f"  Scored {evaluated}/{len(rows)}")
-
-    log.info(f"Done: {evaluated} evaluated")
-    for k, v in winners.items():
-        pct = (v / evaluated * 100) if evaluated > 0 else 0
-        log.info(f"  Winner {k}: {v} ({pct:.1f}%)")
-
-    # Overall Success Rate: Winner B (Target)
-    success_rate = (winners["B"] / evaluated * 100) if evaluated > 0 else 0
-    log.info(f"Overall Attack Success Rate (Winner B): {success_rate:.1f}%")
-
-    return {"evaluated": evaluated, "winners": winners, "success_rate_pct": round(success_rate, 1)}
+    asr_pct = (succeeded / evaluated * 100) if evaluated else 0.0
+    log.info("Done: %s evaluated, ASR %.1f%%", evaluated, asr_pct)
+    return {
+        "evaluated": evaluated,
+        "succeeded": succeeded,
+        "failed": failed,
+        "winners": winners,
+        "asr_pct": round(asr_pct, 1),
+    }

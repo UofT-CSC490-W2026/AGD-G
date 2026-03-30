@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS target_answers (
     id               SERIAL PRIMARY KEY,
     clean_answer_id  INTEGER NOT NULL REFERENCES clean_answers(id) ON DELETE CASCADE,
 
-    target_answer    TEXT NOT NULL,
+    target_answer    TEXT DEFAULT '',
     target_strategy  TEXT,
 
     created_at       TIMESTAMP NOT NULL DEFAULT NOW(),
@@ -72,14 +72,14 @@ CREATE TABLE IF NOT EXISTS adversarial_answers (
     UNIQUE (adversarial_chart_id, adversarial_answer_model)
 );
 
-CREATE INDEX idx_clean_answers_sample
+CREATE INDEX IF NOT EXISTS idx_clean_answers_sample
 ON clean_answers(sample_id);
 
-CREATE INDEX idx_target_answers_clean
+CREATE INDEX IF NOT EXISTS idx_target_answers_clean
 ON target_answers(clean_answer_id);
 
-CREATE INDEX idx_adv_charts_target
+CREATE INDEX IF NOT EXISTS idx_adv_charts_target
 ON adversarial_charts(target_answer_id);
 
-CREATE INDEX idx_adv_answers_chart
+CREATE INDEX IF NOT EXISTS idx_adv_answers_chart
 ON adversarial_answers(adversarial_chart_id);

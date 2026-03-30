@@ -127,7 +127,7 @@ def preprocess_all():
         with conn.cursor() as cur:
             for row in rds.iter_preprocessor_inputs(conn):
                 sample_id = row["sample_id"]
-                raw_uuid = row["raw_graph"]
+                raw_uuid = row["raw_chart"]
                 try:
                     raw_bytes = s3.get_image(raw_uuid)
                 except KeyError:

@@ -66,7 +66,7 @@ def insert_sample(
     cursor.execute(
         """
         INSERT INTO samples (
-            source,
+            chart_source,
             chart_type,
             sample_question,
             sample_answer,
@@ -95,7 +95,7 @@ def insert_preprocessing(
             clean_chart = %s
         WHERE id = %s;
         """,
-        (sample_id, original_width, original_height, meta, chart, sample_id)
+        (original_width, original_height, Json(meta) if meta is not None else None, str(chart), sample_id)
     )
 
 def insert_clean_answer(
@@ -107,7 +107,7 @@ def insert_clean_answer(
     cursor.execute(
         """
         INSERT INTO clean_answers (
-            sample_id
+            sample_id,
             clean_answer_model,
             clean_answer
         )
@@ -149,7 +149,7 @@ def insert_adversarial_chart(
             adversarial_chart,
             attack_method,
             attack_surrogate,
-            attack_meta,
+            attack_meta
         )
         VALUES (%s, %s, %s, %s, %s);
         """,
@@ -204,7 +204,7 @@ def iter_clean_answer_inputs(conn, model_name, batch_size=100):
             FROM samples s
             LEFT JOIN clean_answers ca
               ON ca.sample_id = s.id
-             AND ca.answer_model = %s
+             AND ca.clean_answer_model = %s
             WHERE s.clean_chart IS NOT NULL
               AND ca.id IS NULL
         """, (model_name,))
@@ -223,12 +223,12 @@ def iter_clean_answer_inputs(conn, model_name, batch_size=100):
 def iter_target_inputs(conn, strategy, batch_size=100):
     with conn.cursor() as cur:
         cur.execute("""
-            SELECT ca.id, ca.answer_text, s.clean_chart
+            SELECT ca.id, ca.clean_answer, s.clean_chart
             FROM clean_answers ca
             JOIN samples s ON s.id = ca.sample_id
             LEFT JOIN target_answers ta
               ON ta.clean_answer_id = ca.id
-             AND ta.strategy = %s
+             AND ta.target_strategy = %s
             WHERE ta.id IS NULL
         """, (strategy,))
 
@@ -249,17 +249,18 @@ def iter_attack_inputs(conn, attack_method, target_surrogate, batch_size=100):
         cur.execute("""
             SELECT
                 ta.id,
-                ca.answer_text,
+                ca.clean_answer,
                 s.clean_chart,
-                ta.target_text
+                ta.target_answer
             FROM target_answers ta
             JOIN clean_answers ca ON ca.id = ta.clean_answer_id
             JOIN samples s ON s.id = ca.sample_id
             LEFT JOIN adversarial_charts ag
               ON ag.target_answer_id = ta.id
-             AND ag.generator_name = %s
+             AND ag.attack_method = %s
+             AND ag.attack_surrogate = %s
             WHERE ag.id IS NULL
-        """, (attack_method,))
+        """, (attack_method, target_surrogate))
 
         while True:
             rows = cur.fetchmany(batch_size)
@@ -279,17 +280,17 @@ def iter_eval_inputs(conn, model_name, batch_size=100):
         cur.execute("""
             SELECT
                 ag.id,
-                ca.answer_text,
+                ca.clean_answer,
                 s.clean_chart,
-                ta.target_text,
-                ag.chart_uuid
+                ta.target_answer,
+                ag.adversarial_chart
             FROM adversarial_charts ag
             JOIN target_answers ta ON ta.id = ag.target_answer_id
             JOIN clean_answers ca ON ca.id = ta.clean_answer_id
             JOIN samples s ON s.id = ca.sample_id
             LEFT JOIN adversarial_answers aa
               ON aa.adversarial_chart_id = ag.id
-             AND aa.answer_model = %s
+             AND aa.adversarial_answer_model = %s
             WHERE aa.id IS NULL
         """, (model_name,))
 
