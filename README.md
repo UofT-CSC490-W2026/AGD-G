@@ -4,9 +4,9 @@
 Group-1 Project
 
 <!-- coverage:project:start -->
-![PROJECT coverage](https://img.shields.io/badge/coverage-91.51%25-brightgreen)
+![PROJECT coverage](https://img.shields.io/badge/coverage-90.89%25-brightgreen)
 
-Overall automated line coverage: `91.51%`
+Overall automated line coverage: `90.89%`
 <!-- coverage:project:end -->
 
 ## Terraform usage
