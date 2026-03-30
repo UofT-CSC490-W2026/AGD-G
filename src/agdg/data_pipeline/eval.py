@@ -5,55 +5,42 @@ randomly assigns attack_succeeded.
 """
 import logging
 
-from agdg.data_pipeline.aws import get_db_connection, get_image
+from agdg.data_pipeline.aws import rds, s3
 
 BATCH_SIZE = 100
 
 
-def evaluate_all(max_rows: int = 0):
+def evaluate_all(model_name: str, max_rows: int = 0):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     log = logging.getLogger("evaluate")
-
-    with get_db_connection() as conn:
-        with conn.cursor() as cur:
-            limit = f"LIMIT {max_rows}" if max_rows > 0 else ""
-            cur.execute(f"""
-                SELECT id, adversarial_graph, question, good_answer
-                FROM samples
-                WHERE adversarial_graph IS NOT NULL
-                  AND output_answer IS NULL
-                ORDER BY id
-                {limit}
-            """)
-            rows = cur.fetchall()
-
-    log.info(f"Found {len(rows)} samples to evaluate")
-
-    if not rows:
-        return {"evaluated": 0, "succeeded": 0, "failed": 0}
 
     evaluated = 0
     succeeded = 0
     failed = 0
 
-    with get_db_connection() as conn:
+    with rds.get_db_connection() as conn:
         with conn.cursor() as cur:
-            for sid, adv_uuid, question, good_answer in rows:
-                adv_bytes = get_image(adv_uuid)
+            for row in rds.iter_eval_inputs(conn, model_name):
+                target_answer = row["target_answer"]
+                clean_answer = row["clean_answer"]
+                clean_chart = row["clean_chart"]
+                adversarial_chart = row["adversarial_chart"]
+                clean_bytes = s3.get_image(clean_chart)
+                adversarial_bytes = s3.get_image(adversarial_chart)
 
                 # TODO: Send adversarial image + question to target VQA model
-                output_answer = good_answer
+                output_answer = clean_answer
 
-                attack_succeeded = output_answer.strip().lower() != good_answer.strip().lower()
+                attack_succeeded = output_answer.strip().lower() != clean_answer.strip().lower()
 
-                cur.execute(
-                    """
-                    UPDATE samples
-                    SET output_answer = %s, attack_succeeded = %s
-                    WHERE id = %s
-                    """,
-                    (output_answer, attack_succeeded, sid),
+                rds.insert_adversarial_answer(
+                    cur,
+                    row["adversarial_chart_id"],
+                    output_answer,
+                    model_name,
+                    attack_succeeded,
                 )
+
                 evaluated += 1
                 if attack_succeeded:
                     succeeded += 1
@@ -62,7 +49,7 @@ def evaluate_all(max_rows: int = 0):
 
                 if evaluated % BATCH_SIZE == 0:
                     conn.commit()
-                    log.info(f"  Evaluated {evaluated}/{len(rows)} "
+                    log.info(f"  Evaluated {evaluated} "
                              f"(succeeded: {succeeded}, failed: {failed})")
 
     log.info(f"Done: {evaluated} evaluated, "
