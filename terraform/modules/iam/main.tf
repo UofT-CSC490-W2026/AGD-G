@@ -1,5 +1,5 @@
 resource "aws_iam_user" "modal_user" {
-  name = "modal-service-user"
+  name = "modal-service-user-${var.environment}"
 }
 
 resource "aws_iam_access_key" "modal_key" {

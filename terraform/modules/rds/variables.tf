@@ -22,7 +22,6 @@ variable "security_group_id" {
 variable "deletion_protection" {
   type        = bool
   description = "Prevent accidental RDS deletion."
-  default     = false
 }
 
 variable "backup_retention_days" {

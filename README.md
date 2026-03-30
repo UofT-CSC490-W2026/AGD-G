@@ -143,12 +143,8 @@ Validate every raw chart image, crop surrounding whitespace, letterbox-resize to
 upload the cleaned PNG. This step is included in the ingest job by default, but can be run on its
 own:
 
-```bash
-# Modal
-modal run modal_run/ingest.py -- --skip-import
-
-# Local
-agdg ingest --skip-import
+```
+modal run modal_run/ingest.py --skip-import
 ```
 
 ### 3. Clean caption
@@ -156,12 +152,8 @@ agdg ingest --skip-import
 Run a VLM on each preprocessed chart to produce a baseline ("clean") caption that describes what
 the chart actually shows. The default model is [LLaVA][llava] 1.5-7B.
 
-```bash
-# Modal
-modal run modal_run/evaluate.py -- --mode clean
-
-# Local
-agdg clean-responses
+```
+modal run modal_run/evaluate.py --mode clean
 ```
 
 | Flag | Effect |
@@ -176,12 +168,8 @@ A targeting strategy takes each chart image and its clean caption, then generate
 [Qwen2.5-VL-7B-Instruct](https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct) with chain-of-thought
 prompting.
 
-```bash
-# Modal
-modal run modal_run/target.py -- --strategy qwen
-
-# Local
-agdg target --strategy qwen
+```
+modal run modal_run/target.py --strategy qwen
 ```
 
 | Flag | Effect |
@@ -231,12 +219,8 @@ captions using [all-MiniLM-L6-v2](https://huggingface.co/sentence-transformers/a
 sentence embeddings and cosine similarity. An attack **succeeds** when the VLM's answer is
 semantically closer to the target caption than to the clean caption.
 
-```bash
-# Modal
-modal run modal_run/evaluate.py -- --mode evaluate
-
-# Local
-agdg evaluate
+```
+modal run modal_run/evaluate.py --mode evaluate
 ```
 
 | Flag | Effect |

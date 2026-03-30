@@ -14,8 +14,9 @@ resource "aws_db_instance" "postgres" {
   publicly_accessible    = true
   vpc_security_group_ids = [var.security_group_id]
 
-  skip_final_snapshot = true
-  deletion_protection = false
+  skip_final_snapshot     = !var.deletion_protection
+  deletion_protection     = var.deletion_protection
+  backup_retention_period = var.backup_retention_days
 }
 
 ##
@@ -45,7 +46,7 @@ resource "postgresql_grant" "modal_public_schema_usage" {
 data "aws_caller_identity" "current" {}
 
 resource "aws_iam_policy" "modal_policy" {
-  name = "modal-rds-policy"
+  name = "modal-rds-policy-${var.environment}"
 
   policy = jsonencode({
     Version = "2012-10-17"

@@ -5,6 +5,14 @@ module "security" {
   allowed_db_cidr_blocks = var.allowed_db_cidr_blocks
 }
 
+module "iam" {
+  source = "../../modules/iam"
+
+  modal_rds_policy_arn = module.rds.modal_policy_arn
+  modal_s3_policy_arn  = module.s3.modal_policy_arn
+  environment          = var.environment
+}
+
 module "rds" {
   source = "../../modules/rds"
 
@@ -20,7 +28,15 @@ module "rds" {
 module "s3" {
   source = "../../modules/s3"
 
-  environment = var.environment
-  bucket_name = var.bucket_name
-  versioning  = var.s3_versioning
+  environment         = var.environment
+  bucket_name         = var.bucket_name
+  versioning          = var.s3_versioning
+  deletion_protection = var.s3_deletion_protection
+}
+
+module "modal" {
+  source = "../../modules/modal"
+
+  key_id     = module.iam.modal_key_id
+  key_secret = module.iam.modal_key_secret
 }
