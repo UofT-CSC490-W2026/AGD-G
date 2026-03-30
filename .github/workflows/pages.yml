@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - pages-preview
     paths:
       - ".github/workflows/pages.yml"
       - "frontend/**"
@@ -26,6 +27,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
 
       - uses: actions/configure-pages@v5
 
