@@ -37,7 +37,7 @@ def get_device() -> torch.device:
         return torch.device("mps")
     return torch.device("cpu")
 
-def evaluate_similarity(model, output_text: str, text_a: str, text_b: str, cutoff_score: float = 0.75, margin: float = 0.02) -> str:
+def evaluate_similarity(model, output_text: str, text_a: str, text_b: str, cutoff_score: float = 0.5, margin: float = 0.02) -> str:
     """
     Generates embeddings and evaluates text similarity.
     Expects an already-initialized SentenceTransformer model to be passed in.
