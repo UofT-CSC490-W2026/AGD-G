@@ -1,10 +1,12 @@
+<img width="360" height="93" alt="AGD-G logo rendered in white monospace text on black background, depicting the letters AGD dot G in an artistic gradient in the foreground, with a subtle line chart in the background" src="https://github.com/user-attachments/assets/1d8ea8e5-0f1e-4bdb-b042-493b8bc8f6de" />
+
 # AGD-G
 Group-1 Project
 
 <!-- coverage:project:start -->
-![PROJECT coverage](https://img.shields.io/badge/coverage-97.35%25-brightgreen)
+![PROJECT coverage](https://img.shields.io/badge/coverage-91.51%25-brightgreen)
 
-Overall automated line coverage: `97.35%`
+Overall automated line coverage: `91.51%`
 <!-- coverage:project:end -->
 
 ## Terraform usage

@@ -24,12 +24,14 @@ coverage.md
 .pytest_cache/
 **/.pytest_cache/
 
-# Test images
-agd/*.png
-agd/*.jpg
-
 # Vim swap files
 [._]*.s[a-v][a-z]
 .vscode/settings.json
 coverage.lcov
 restore.py
+
+# pip metadata
+*.egg-info
+
+# Profile results
+profiling/**/*.json
