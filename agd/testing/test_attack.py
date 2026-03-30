@@ -1,4 +1,5 @@
 import types
+from PIL import Image
 
 from agd.core import attack as attack_module
 
@@ -25,8 +26,13 @@ class FakeTextAttacker:
         FakeTextAttacker.last_instance = self
 
     def attack(self, **kwargs):
+        print("text")
         self.kwargs = kwargs
-        return FakeImage()
+        clean = self.kwargs["clean"]
+        if isinstance(clean, Image.Image):
+            return FakeImage()
+        else:
+            return [FakeImage()] * len(clean)
 
 
 class FakeImageAttacker:
@@ -38,8 +44,14 @@ class FakeImageAttacker:
         FakeImageAttacker.last_instance = self
 
     def attack(self, **kwargs):
+        print("text")
         self.kwargs = kwargs
-        return FakeImage()
+        self.kwargs = kwargs
+        clean = self.kwargs["clean"]
+        if isinstance(clean, Image.Image):
+            return FakeImage()
+        else:
+            return [FakeImage()] * len(clean)
 
 
 class FakeUntargetedAttacker:
@@ -51,8 +63,14 @@ class FakeUntargetedAttacker:
         FakeUntargetedAttacker.last_instance = self
 
     def attack(self, **kwargs):
+        print("text")
         self.kwargs = kwargs
-        return FakeImage()
+        self.kwargs = kwargs
+        clean = self.kwargs["clean"]
+        if isinstance(clean, Image.Image):
+            return FakeImage()
+        else:
+            return [FakeImage()] * len(clean)
 
 
 def setup_fakes(monkeypatch):

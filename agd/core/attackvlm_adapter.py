@@ -5,8 +5,8 @@ from typing import Any, Sequence
 
 from PIL import Image
 
-from agd.core.attacks.attackvlm import AttackVLMText
-from agd.core.models.clip_target import PatchTextCLIPModel, TextCLIPModel
+from .attacks.attackvlm import AttackVLMText
+from .models.clip_target import PatchTextCLIPModel, TextCLIPModel
 
 
 @dataclass
@@ -37,15 +37,14 @@ class AttackVLMTextAdapter:
         self.method = AttackVLMText(self.model, device=self.device)
 
     def attack(self, clean: Sequence[Image.Image], target: Sequence[str]) -> AttackResult:
-        adversarial = []
-        success = []
-        for image, target_text in zip(clean, target):
-            adv = self.method.attack(
-                clean=image,
-                target=target_text,
-                strength=self.strength,
-                hyperparameters=self.hyperparameters,
-            )
-            adversarial.append(adv)
-            success.append(False)
+        print(type(clean))
+        print(type(self.method))
+        adversarial = self.method.attack(
+            clean=clean,
+            target=target,
+            strength=self.strength,
+            hyperparameters=self.hyperparameters,
+        )
+        print(type(adversarial))
+        success = [False] * len(adversarial)
         return AttackResult(adversarial=adversarial, success=success, scores=None)
