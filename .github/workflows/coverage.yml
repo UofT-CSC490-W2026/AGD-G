@@ -43,18 +43,10 @@ jobs:
       - name: Run modal tests with coverage
         run: |
           pytest \
-            --cov=modal_run
-          mv .coverage .coverage.modal
-
-      - name: Run AGD tests with coverage
-        run: |
-          pytest \
-            --cov=agdg
-          mv .coverage .coverage.agdg
+            --cov=modal_run --cov=agdg
 
       - name: Coverage report
         run: |
-          python -m coverage combine .coverage.modal .coverage.agdg
           python -m coverage report -m
           python -m coverage xml -o coverage.xml
           python -m coverage json -o coverage.json
