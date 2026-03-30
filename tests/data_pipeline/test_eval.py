@@ -1,128 +1,76 @@
+
+import pytest
+import torch
 import sys
-import types
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch, ANY
 
+# Mock sentence_transformers at the sys.modules level to avoid Keras errors during import
+mock_st = MagicMock()
+sys.modules["sentence_transformers"] = mock_st
 
-def _install_fake_boto(monkeypatch):
-    fake_boto3 = types.ModuleType("boto3")
-    fake_boto3.client = MagicMock()
-    fake_psycopg2 = types.ModuleType("psycopg2")
-    fake_psycopg2.connect = MagicMock()
-    fake_botocore = types.ModuleType("botocore")
-    fake_botocore_exc = types.ModuleType("botocore.exceptions")
-    fake_botocore_exc.ClientError = type("ClientError", (Exception,), {})
-    fake_botocore.exceptions = fake_botocore_exc
+from agdg.data_pipeline.eval import evaluate_all
 
-    monkeypatch.setitem(sys.modules, "boto3", fake_boto3)
-    monkeypatch.setitem(sys.modules, "psycopg2", fake_psycopg2)
-    monkeypatch.setitem(sys.modules, "botocore", fake_botocore)
-    monkeypatch.setitem(sys.modules, "botocore.exceptions", fake_botocore_exc)
+@pytest.fixture
+def mock_aws():
+    with patch("agdg.data_pipeline.eval.get_db_connection") as mock_db:
+        conn = MagicMock()
+        cur = MagicMock()
+        conn.cursor.return_value.__enter__.return_value = cur
+        mock_db.return_value.__enter__.return_value = conn
+        yield {"db": mock_db, "cur": cur, "conn": conn}
 
+@pytest.fixture
+def mock_sim_model():
+    mock_model = MagicMock()
+    # Mock embeddings: 3 vectors (output, A, B)
+    mock_model.encode.return_value = torch.tensor([
+        [1.0, 0.0], # output
+        [0.0, 1.0], # A (clean)
+        [1.0, 0.0]  # B (target)
+    ])
+    mock_st.SentenceTransformer.return_value = mock_model
+    yield mock_model
 
-class FakeCursor:
-    def __init__(self, rows, updates):
-        self.rows = rows
-        self.updates = updates
-        self.rowcount = 1
+def test_evaluate_all_no_rows(mock_aws, mock_sim_model):
+    mock_aws["cur"].fetchall.return_value = []
+    result = evaluate_all()
+    assert result == {"evaluated": 0}
 
-    def execute(self, query, params=None):
-        if query.lstrip().startswith("UPDATE"):
-            self.updates.append((query, params))
-
-    def fetchall(self):
-        return list(self.rows)
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc, tb):
-        return False
-
-
-class FakeConnection:
-    def __init__(self, rows, updates):
-        self.rows = rows
-        self.updates = updates
-        self.commits = 0
-
-    def cursor(self):
-        return FakeCursor(self.rows, self.updates)
-
-    def commit(self):
-        self.commits += 1
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc, tb):
-        return False
-
-
-def _load_module(monkeypatch, rows):
-    import importlib
-    _install_fake_boto(monkeypatch)
-    updates = []
-
-    class FakeConnectionFactory:
-        def __init__(self):
-            self.calls = 0
-
-        def __call__(self):
-            self.calls += 1
-            return FakeConnection(rows if self.calls == 1 else [], updates)
-
-    factory = FakeConnectionFactory()
-
-    sys.modules.pop("agdg.data_pipeline.aws", None)
-    sys.modules.pop("agdg.data_pipeline.eval", None)
-    module = importlib.import_module("agdg.data_pipeline.eval")
-
-    monkeypatch.setattr(module, "get_db_connection", factory)
-    monkeypatch.setattr(module, "get_image", lambda key: f"image:{key}".encode())
-
-    return module, updates, factory
-
-
-def test_evaluate_all_returns_zero_when_no_rows(monkeypatch):
-    module, updates, _ = _load_module(monkeypatch, [])
-    result = module.evaluate_all()
-    assert result == {"evaluated": 0, "succeeded": 0, "failed": 0}
-    assert updates == []
-
-
-def test_evaluate_all_updates_rows_and_reports_counts(monkeypatch):
-    rows = [(1, "adv-1", "What happened?", "Correct answer")]
-    module, updates, _ = _load_module(monkeypatch, rows)
-
-    result = module.evaluate_all()
-
+def test_evaluate_all_success(mock_aws, mock_sim_model):
+    # Mock data: output matches target (B) better than clean (A)
+    mock_aws["cur"].fetchall.return_value = [
+        (1, "Clean caption", "Target text", "Target text")
+    ]
+    
+    result = evaluate_all()
+    
     assert result["evaluated"] == 1
-    assert result["succeeded"] == 0
-    assert result["failed"] == 1
-    assert result["asr_pct"] == 0.0
-    assert updates[0][1] == ("Correct answer", False, 1)
+    assert result["winners"]["B"] == 1
+    
+    # Verify DB update
+    update_calls = [call for call in mock_aws["cur"].execute.call_args_list if "UPDATE samples" in call[0][0]]
+    assert len(update_calls) == 1
+    assert update_calls[0][0][1] == ("B", 1)
 
+def test_evaluate_all_missing_data(mock_aws, mock_sim_model):
+    mock_aws["cur"].fetchall.return_value = [
+        (1, None, "Target", "Response")
+    ]
+    
+    result = evaluate_all()
+    assert result["evaluated"] == 0
 
-def test_evaluate_all_counts_success_and_commits_batches(monkeypatch):
-    class ToggleAnswer:
-        def __init__(self):
-            self.calls = 0
-
-        def strip(self):
-            return self
-
-        def lower(self):
-            self.calls += 1
-            return "first" if self.calls == 1 else "second"
-
-    rows = [(1, "adv-1", "What happened?", ToggleAnswer())]
-    module, updates, factory = _load_module(monkeypatch, rows)
-    module.BATCH_SIZE = 1
-
-    result = module.evaluate_all()
-
-    assert result["evaluated"] == 1
-    assert result["succeeded"] == 1
-    assert result["failed"] == 0
-    assert result["asr_pct"] == 100.0
-    assert factory.calls == 2
+def test_evaluate_all_tie(mock_aws, mock_sim_model):
+    # Mock embeddings to be identical
+    mock_sim_model.encode.return_value = torch.tensor([
+        [1.0, 0.0],
+        [1.0, 0.0],
+        [1.0, 0.0]
+    ])
+    
+    mock_aws["cur"].fetchall.return_value = [
+        (1, "A", "B", "Output")
+    ]
+    
+    result = evaluate_all()
+    assert result["winners"]["Tie"] == 1

@@ -107,9 +107,11 @@ def create_table_if_not_exists() -> None:
                     good_graph        UUID,
                     hidden_graph      UUID,
                     hidden_answer     TEXT,
+                    attack_target_text TEXT,
                     adversarial_graph UUID,
                     output_answer     TEXT,
                     attack_succeeded  BOOLEAN,
+                    similarity_winner TEXT,
                     created_at        TIMESTAMP NOT NULL DEFAULT NOW()
                 );
             """)
