@@ -3,6 +3,9 @@ Modal script to run the test attack. Not set up for AWS integration or productio
 """
 import modal
 try:
+    import sys
+    import os
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from agd.core.attack import attack
 except (ImportError, ModuleNotFoundError):
     from core.attack import attack
