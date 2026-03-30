@@ -8,17 +8,20 @@ import torch
 from .base import RawResult, TargetingModel
 
 SYSTEM_INSTRUCTION = (
-    "You are an expert in data visualization and visual association.\n\n"
+    "You are an expert in data visualization.\n\n"
     "Your task is to analyze a provided chart image and generate a brief caption "
-    "for a new chart. This new chart must share the same visual structure (chart type) "
-    "as the original image but feature a different, highly iconic, and tangible subject.\n\n"
+    "for a completely unrelated chart. This new chart must share the same visual "
+    "structure (chart type) as the original image but describe a subject from an "
+    "entirely different domain.\n\n"
     "Rules:\n"
     "1. Identify the chart type from the image (e.g., Bar chart, Heatmap, Pie chart, Line graph).\n"
-    "2. Identify the main subject of the original chart.\n"
-    "3. Find the single most iconic, concrete, visual item that an average person "
-    "immediately associates with that subject "
-    "(e.g., Europe -> vacation spots, Italy -> pizza toppings, Depression -> illness rates).\n"
-    "4. The new subject must be a photographable, physical object or real scene -- not abstract.\n"
+    "2. Identify the domain of the original chart (e.g., finance, healthcare, sports).\n"
+    "3. Choose a subject from a completely different domain -- it must share NO words, "
+    "concepts, or associations with the original subject. "
+    "(e.g., retail sales -> animal migration patterns, "
+    "election results -> ocean temperature changes, "
+    "hospital patient counts -> recipe ingredient ratios).\n"
+    "4. The new subject must be a concrete, real-world topic -- not abstract.\n"
     "5. Your final caption must be exactly 3 to 6 words long.\n"
     "6. Output your step-by-step reasoning inside <thinking> tags, "
     "then your final caption inside <output> tags."
@@ -29,37 +32,40 @@ FEW_SHOT_EXAMPLES: list[tuple[str, str]] = [
         "A bar chart showing European export volumes by country.",
         "<thinking>\n"
         "Chart type: Bar chart.\n"
-        "Original subject: European export volumes.\n"
-        "Core concept: Europe.\n"
-        "Tangible association: Vacation spots.\n"
-        "Drafting caption: Bar chart of European vacation spots.\n"
-        "Word count check: 6 words. This is acceptable.\n"
+        "Original domain: International trade / economics.\n"
+        "I must pick a completely different domain with no overlap.\n"
+        "Different domain: Wildlife biology.\n"
+        "New subject: Bird species population by continent.\n"
+        "Drafting caption: Bar chart of bird species populations.\n"
+        "Word count check: 6 words. Acceptable.\n"
         "</thinking>\n"
-        "<output>Bar chart of European vacation spots</output>",
+        "<output>Bar chart of bird species populations</output>",
     ),
     (
         "A heatmap of depression rates by region.",
         "<thinking>\n"
         "Chart type: Heatmap.\n"
-        "Original subject: Depression rates by region.\n"
-        "Core concept: Depression.\n"
-        "Tangible association: Illness.\n"
-        "Drafting caption: Heatmap of regional illness rates.\n"
-        "Word count check: 5 words. This is acceptable.\n"
+        "Original domain: Mental health / epidemiology.\n"
+        "I must pick a completely different domain with no overlap.\n"
+        "Different domain: Culinary arts.\n"
+        "New subject: Spice usage intensity across cuisines.\n"
+        "Drafting caption: Heatmap of global spice usage.\n"
+        "Word count check: 5 words. Acceptable.\n"
         "</thinking>\n"
-        "<output>Heatmap of regional illness rates</output>",
+        "<output>Heatmap of global spice usage</output>",
     ),
     (
-        "A pie chart of Italian economic output.",
+        "A line graph of quarterly software sales revenue.",
         "<thinking>\n"
-        "Chart type: Pie chart.\n"
-        "Original subject: Italian economic output.\n"
-        "Core concept: Italy.\n"
-        "Tangible association: Pizza toppings.\n"
-        "Drafting caption: Pie chart of Italian pizza toppings.\n"
-        "Word count check: 6 words. This is acceptable.\n"
+        "Chart type: Line graph.\n"
+        "Original domain: Technology / business revenue.\n"
+        "I must pick a completely different domain with no overlap.\n"
+        "Different domain: Marine biology.\n"
+        "New subject: Ocean temperature over the seasons.\n"
+        "Drafting caption: Line graph of ocean temperatures.\n"
+        "Word count check: 5 words. Acceptable.\n"
         "</thinking>\n"
-        "<output>Pie chart of Italian pizza toppings</output>",
+        "<output>Line graph of ocean temperatures</output>",
     ),
 ]
 
@@ -95,7 +101,7 @@ class QwenTargetingModel(TargetingModel):
         Convert image/clean_text pairs to target texts which differ from the clean texts.
         Returns parsed target captions only (thinking trace is discarded).
         """
-        return [r["target"] for r in self._generate(images, clean_texts, max_new_tokens=40)]
+        return [r["target"] for r in self._generate(images, clean_texts, max_new_tokens=200)]
 
     def generate_raw(self, images: List[Image.Image], clean_texts: List[str]) -> List[RawResult]:
         """

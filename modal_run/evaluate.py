@@ -17,19 +17,17 @@ app = modal.App(
 
 
 @app.function(timeout=3600, gpu="A10G:1")
-def evaluate(max_rows: int = 0, strategy: str | None = None):
+def evaluate(max_rows: int = 0, strategy: str | None = None, source: str | None = None, batch_size: int = 8):
     from agdg.data_pipeline.eval import evaluate_all
 
-    return evaluate_all(max_rows=max_rows, target_strategy=strategy)
+    return evaluate_all(max_rows=max_rows, target_strategy=strategy, source=source, batch_size=batch_size)
 
 
 @app.function(timeout=3600, gpu="A10G:1")
-def generate_clean(max_rows: int = 0, model_id: str = "llava-hf/llava-1.5-7b-hf"):
+def generate_clean(max_rows: int = 0, model_id: str = "llava-hf/llava-1.5-7b-hf", batch_size: int = 8):
     from agdg.data_pipeline.clean_response import generate_clean_responses
 
-    return generate_clean_responses(max_rows=max_rows, model_id=model_id)
-
-
+    return generate_clean_responses(max_rows=max_rows, model_id=model_id, batch_size=batch_size)
 
 
 @app.local_entrypoint()
@@ -38,11 +36,13 @@ def main(
     limit: int = 0,
     model: str = "llava-hf/llava-1.5-7b-hf",
     strategy: str | None = None,
+    source: str | None = None,
+    batch_size: int = 8,
 ):
     if mode == "evaluate":
-        r = evaluate.remote(max_rows=limit, strategy=strategy)
+        r = evaluate.remote(max_rows=limit, strategy=strategy, source=source, batch_size=batch_size)
     elif mode == "clean":
-        r = generate_clean.remote(max_rows=limit, model_id=model)
+        r = generate_clean.remote(max_rows=limit, model_id=model, batch_size=batch_size)
     else:
         raise ValueError(f"Unknown mode: {mode!r} (expected 'evaluate' or 'clean')")
     

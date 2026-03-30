@@ -358,8 +358,31 @@ def iter_eval_inputs(conn, model_name, batch_size=100):
                     "adversarial_chart": adv_chart,
                 }
 
+def delete_bad_targets(strategy: str) -> int:
+    """Delete target_answers (and downstream rows) where the target text looks
+    like a raw model tag rather than a parsed caption."""
+    with get_db_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                DELETE FROM target_answers
+                WHERE target_strategy = %s
+                  AND target_answer LIKE '<%%'
+                """,
+                (strategy,),
+            )
+            return cursor.rowcount
+
+
 def wipe_rds() -> None:
     with get_db_connection() as conn:
         with conn.cursor() as cursor:
-            cursor.execute("DROP SCHEMA public CASCADE;")
-            cursor.execute("CREATE SCHEMA public;")
+            cursor.execute("""
+                TRUNCATE TABLE
+                    adversarial_answers,
+                    adversarial_charts,
+                    target_answers,
+                    clean_answers,
+                    samples
+                RESTART IDENTITY CASCADE;
+            """)
