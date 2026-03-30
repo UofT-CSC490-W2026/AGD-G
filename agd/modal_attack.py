@@ -12,7 +12,7 @@ except (ImportError, ModuleNotFoundError):
 
 modal_image = (
     modal.Image.debian_slim(python_version="3.11")
-    .uv_pip_install("torch", "transformers", "pillow", "tqdm", "accelerate")
+    .uv_pip_install("torch", "transformers>=4.48", "pillow", "tqdm", "accelerate")
     .add_local_file("xray-fish-profile.png", "/root/clean_image.png", copy=True)
     .add_local_file("data_viz.png", "/root/data_viz.png", copy=True)
     .add_local_file("target.jpg", "/root/target.jpg", copy=True)
@@ -39,8 +39,8 @@ def attack_test(
     step_size: float = 0.0078,
     steps: int = 300,
     repel_clean: float = 0.0,
-    attacker: str = "targeted_text_ocr",
-    model: str = "clip_text_patch",
+    attacker: str = "targeted_text",
+    model: str = "llava15_text",
     clean_image_path: str = "/root/data_viz.png",
     target_question: str = "Which country was the leading pharmaceutical supplier to Germany in 2019?",
     target_response: str = "Ireland",
@@ -61,6 +61,8 @@ def attack_test(
         alpha=step_size,
         steps=steps,
         repel_clean=repel_clean,
+        attacker=attacker,
+        model=model,
         clean_image_path=clean_image_path,
         target_question=target_question,
         target_response=target_response,

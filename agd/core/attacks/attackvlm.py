@@ -305,6 +305,31 @@ class AttackVLMText(_AttackVLM, TextAttackMethod):
     def __init__(self, model: TextTargetModel, device: Optional[str] = None):
         super().__init__(model, device)
 
+    @staticmethod
+    def _is_text_batch(value: object) -> bool:
+        return isinstance(value, Sequence) and not isinstance(value, str)
+
+    def _embed_text_bank(
+        self,
+        text: str | Sequence[str],
+        *,
+        aggregate: bool = False,
+    ) -> torch.Tensor:
+        text_embed = self.model.embed_text(text)
+        if aggregate and text_embed.ndim == 2 and text_embed.shape[0] > 1:
+            text_embed = text_embed.mean(dim=0, keepdim=True)
+            text_embed = text_embed / text_embed.norm(p=2, dim=-1, keepdim=True).clamp_min(1e-12)
+        return text_embed
+
+    def _expand_loss(self, value: torch.Tensor, batch_size: int) -> torch.Tensor:
+        if value.ndim == 0:
+            return value.repeat(batch_size)
+        if value.ndim == 1 and value.shape[0] == batch_size:
+            return value
+        if value.ndim == 1 and value.shape[0] == 1:
+            return value.repeat(batch_size)
+        return value.reshape(-1)[:batch_size]
+
     def setup(
         self,
         clean_t: torch.Tensor | Sequence[Image.Image],
@@ -314,20 +339,21 @@ class AttackVLMText(_AttackVLM, TextAttackMethod):
 		repel_source_text: float = 0.5,
         *args, **kwargs
     ) -> None:
-        self.target_text_embed = self.model.embed_text(target_text)
+        self.target_text_embed = self._embed_text_bank(target_text)
         self.repel_clean = repel_clean
         self.repel_source_text = repel_source_text
         if source_text:
-            self.source_text_embed = self.model.embed_text(source_text)
+            self.source_text_embed = self._embed_text_bank(source_text)
         else:
             self.source_text_embed = None
 
     def compute_step_loss(self, adv_embed, clean_embed) -> torch.Tensor:
-        sim_text = self.model(adv_embed, self.target_text_embed)
-        sim_clean = self.model(adv_embed, clean_embed)
+        batch_size = clean_embed.shape[0]
+        sim_text = self._expand_loss(self.model(adv_embed, self.target_text_embed), batch_size)
+        sim_clean = self._expand_loss(self.model(adv_embed, clean_embed), batch_size)
         step_loss = -sim_text + self.repel_clean * sim_clean
         if self.source_text_embed is not None:
-            sim_source_text = self.model(adv_embed, self.source_text_embed)
+            sim_source_text = self._expand_loss(self.model(adv_embed, self.source_text_embed), batch_size)
             step_loss = step_loss + self.repel_source_text * sim_source_text
         return step_loss
 
@@ -354,6 +380,208 @@ class AttackVLMText(_AttackVLM, TextAttackMethod):
             eot_shift_px=int(hp.get("eot_shift_px", 0)),
             repel_clean=float(hp.get("repel_clean", 0.35)),
             repel_source_text=float(hp.get("repel_source_text", 0.5)),
+        )
+
+
+class AttackVLMGraphTopic(AttackVLMText, TextAttackMethod):
+    """
+    Topic-targeted attack for prompts like "What is the graph about?".
+    Uses a prompt bank plus topic-anchor phrases to tighten the surrogate target.
+    """
+
+    DEFAULT_QUESTION = "What is the graph about?"
+    STOPWORDS = {
+        "a", "an", "and", "are", "as", "at", "about", "by", "for", "from", "in",
+        "is", "it", "of", "on", "or", "that", "the", "this", "to", "with",
+    }
+
+    @classmethod
+    def _normalize_topic(cls, text: str) -> str:
+        return " ".join((text or "").strip().split())
+
+    @classmethod
+    def _topic_anchor_terms(cls, topic: str) -> List[str]:
+        normalized = cls._normalize_topic(topic).lower()
+        tokens = re.findall(r"[a-z0-9]+", normalized)
+        anchors: List[str] = []
+        for token in tokens:
+            if len(token) < 3 or token in cls.STOPWORDS:
+                continue
+            if token not in anchors:
+                anchors.append(token)
+        if normalized and normalized not in anchors:
+            anchors.insert(0, normalized)
+        return anchors[:6]
+
+    @classmethod
+    def _build_anchor_phrases(cls, topic: str) -> List[str]:
+        normalized = cls._normalize_topic(topic)
+        anchors = cls._topic_anchor_terms(topic)
+        phrases: List[str] = []
+        if normalized:
+            phrases.extend([
+                normalized,
+                f"topic: {normalized}",
+                f"subject: {normalized}",
+            ])
+        for anchor in anchors:
+            phrases.extend([
+                anchor,
+                f"about {anchor}",
+                f"graph about {anchor}",
+            ])
+        seen = set()
+        deduped: List[str] = []
+        for phrase in phrases:
+            phrase = phrase.strip()
+            if not phrase or phrase in seen:
+                continue
+            deduped.append(phrase)
+            seen.add(phrase)
+        return deduped
+
+    @classmethod
+    def build_topic_texts(
+        cls,
+        topic: str,
+        *,
+        question: Optional[str] = None,
+        include_question_answer: bool = True,
+    ) -> List[str]:
+        normalized_topic = cls._normalize_topic(topic)
+        prompts: List[str] = [normalized_topic]
+        if normalized_topic:
+            prompts.extend([
+                f"a graph about {normalized_topic}",
+                f"a chart about {normalized_topic}",
+                f"a data visualization about {normalized_topic}",
+                f"this graph is about {normalized_topic}",
+                f"the topic of the graph is {normalized_topic}",
+                f"the graph shows {normalized_topic}",
+                f"the chart shows {normalized_topic}",
+                f"the graph compares {normalized_topic}",
+                f"graph topic: {normalized_topic}",
+                f"chart topic: {normalized_topic}",
+            ])
+            prompts.extend(cls._build_anchor_phrases(normalized_topic))
+
+        effective_question = (question or cls.DEFAULT_QUESTION).strip()
+        if include_question_answer and effective_question:
+            prompts.append(f"Question: {effective_question}\nAnswer: {normalized_topic}")
+            prompts.append(f"Question: {effective_question}\nShort answer: {normalized_topic}")
+            prompts.append(f"{effective_question} {normalized_topic}")
+            for anchor in cls._topic_anchor_terms(normalized_topic):
+                prompts.append(f"Question: {effective_question}\nAnswer: {anchor}")
+
+        seen = set()
+        deduped: List[str] = []
+        for prompt in prompts:
+            prompt = prompt.strip()
+            if not prompt or prompt in seen:
+                continue
+            deduped.append(prompt)
+            seen.add(prompt)
+        return deduped
+
+    def setup(
+        self,
+        clean_t: torch.Tensor | Sequence[Image.Image],
+        target_text: str | Sequence[str],
+        source_text: Optional[str] = None,
+        question: Optional[str] = None,
+        repel_clean: float = 0.35,
+        repel_source_text: float = 0.5,
+        topic_anchor_weight: float = 0.35,
+        *args, **kwargs
+    ) -> None:
+        self.repel_clean = repel_clean
+        self.repel_source_text = repel_source_text
+        self.topic_anchor_weight = topic_anchor_weight
+
+        if self._is_text_batch(target_text):
+            banks = [self.build_topic_texts(text, question=question) for text in target_text]
+            self.target_text_embed = torch.cat(
+                [self._embed_text_bank(bank, aggregate=True) for bank in banks],
+                dim=0,
+            )
+            self.target_anchor_embed = torch.cat(
+                [self._embed_text_bank(self._build_anchor_phrases(text), aggregate=True) for text in target_text],
+                dim=0,
+            )
+        else:
+            self.target_text_embed = self._embed_text_bank(
+                self.build_topic_texts(target_text, question=question),
+                aggregate=True,
+            )
+            self.target_anchor_embed = self._embed_text_bank(
+                self._build_anchor_phrases(target_text),
+                aggregate=True,
+            )
+
+        source_topic = kwargs.get("source_topic", source_text)
+        if source_topic:
+            if self._is_text_batch(source_topic):
+                source_banks = [self.build_topic_texts(text, question=question) for text in source_topic]
+                self.source_text_embed = torch.cat(
+                    [self._embed_text_bank(bank, aggregate=True) for bank in source_banks],
+                    dim=0,
+                )
+                self.source_anchor_embed = torch.cat(
+                    [self._embed_text_bank(self._build_anchor_phrases(text), aggregate=True) for text in source_topic],
+                    dim=0,
+                )
+            else:
+                self.source_text_embed = self._embed_text_bank(
+                    self.build_topic_texts(source_topic, question=question),
+                    aggregate=True,
+                )
+                self.source_anchor_embed = self._embed_text_bank(
+                    self._build_anchor_phrases(source_topic),
+                    aggregate=True,
+                )
+        else:
+            self.source_text_embed = None
+            self.source_anchor_embed = None
+
+    def compute_step_loss(self, adv_embed, clean_embed) -> torch.Tensor:
+        batch_size = clean_embed.shape[0]
+        sim_topic = self._expand_loss(self.model(adv_embed, self.target_text_embed), batch_size)
+        sim_anchor = self._expand_loss(self.model(adv_embed, self.target_anchor_embed), batch_size)
+        sim_clean = self._expand_loss(self.model(adv_embed, clean_embed), batch_size)
+        step_loss = -sim_topic - self.topic_anchor_weight * sim_anchor + self.repel_clean * sim_clean
+        if self.source_text_embed is not None:
+            sim_source_text = self._expand_loss(self.model(adv_embed, self.source_text_embed), batch_size)
+            step_loss = step_loss + self.repel_source_text * sim_source_text
+        if self.source_anchor_embed is not None:
+            sim_source_anchor = self._expand_loss(self.model(adv_embed, self.source_anchor_embed), batch_size)
+            step_loss = step_loss + 0.5 * self.repel_source_text * sim_source_anchor
+        return step_loss
+
+    def attack(
+        self,
+        clean: Image.Image | Sequence[Image.Image],
+        target: str | Sequence[str],
+        strength: float,
+        hyperparameters: Optional[Dict] = None
+    ) -> Image.Image | Sequence[Image.Image]:
+        if not isinstance(clean, Image.Image) and len(clean) == 0:
+            return []
+        hp = hyperparameters or {}
+        return self._run_attack(
+            clean=clean,
+            target_text=target,
+            source_topic=hp.get("source_topic"),
+            question=hp.get("question", self.DEFAULT_QUESTION),
+            eps=self._strength_to_eps(strength, hp),
+            alpha=float(hp.get("alpha", 2 / 255)),
+            steps=int(hp.get("steps", 300)),
+            eot_samples=int(hp.get("eot_samples", 1)),
+            eot_noise_std=float(hp.get("eot_noise_std", 0.0)),
+            eot_brightness=float(hp.get("eot_brightness", 0.0)),
+            eot_shift_px=int(hp.get("eot_shift_px", 0)),
+            repel_clean=float(hp.get("repel_clean", 0.35)),
+            repel_source_text=float(hp.get("repel_source_text", 0.5)),
+            topic_anchor_weight=float(hp.get("topic_anchor_weight", 0.35)),
         )
 
 

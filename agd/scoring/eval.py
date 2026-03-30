@@ -1,7 +1,7 @@
 import torch
 import torch.nn.functional as F
 
-def determine_winner(score_a: float, score_b: float, cutoff_score: float = 0.75, margin: float = 0.02) -> str:
+def determine_winner(score_a: float, score_b: float, cutoff_score: float = 0.5, margin: float = 0.02) -> str:
     """
     Determines the winning text based on similarity scores.
 

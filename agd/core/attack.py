@@ -15,6 +15,7 @@ from .models.clip_target import (
     TextCLIPModel,
     PatchTextCLIPModel
 )
+from .models.llava_target import LlavaTextTargetModel
 
 import os
 import shutil
@@ -47,6 +48,7 @@ def attack(
         "clip_image": ImageCLIPModel,
         "clip_text": TextCLIPModel,
         "clip_text_patch": PatchTextCLIPModel,
+        "llava15_text": LlavaTextTargetModel,
     }
     target_model = model_classes[model]()
     attack_classes = {
