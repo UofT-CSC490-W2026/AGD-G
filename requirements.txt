@@ -1,3 +1,14 @@
-modal
+accelerate
 boto3
+diffusers
+huggingface_hub
+modal
+numpy
+pillow
 psycopg2-binary
+pytest
+pytest-cov
+python-dotenv
+torch
+tqdm
+transformers

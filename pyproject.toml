@@ -1,0 +1,22 @@
+[project]
+name = "agdg"
+version = "0.1.0"
+dependencies = [
+	"accelerate",
+	"boto3",
+	"diffusers",
+	"huggingface_hub",
+	"modal",
+	"numpy",
+	"pillow",
+	"psycopg2-binary",
+	"pytest",
+	"pytest-cov",
+	"python-dotenv",
+	"torch",
+	"tqdm",
+	"transformers",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]

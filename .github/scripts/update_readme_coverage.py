@@ -23,7 +23,7 @@ def build_block(area: str, percent: float) -> str:
     end_marker = f"<!-- coverage:{area}:end -->"
     rounded = f"{percent:.2f}"
     color = badge_color(percent)
-    
+
     if area == "project":
         title = "PROJECT"
         badge_label = "coverage"
@@ -31,7 +31,7 @@ def build_block(area: str, percent: float) -> str:
     else:
         badge_label = f"{area} coverage"
         description = f"`{area}/` automated line coverage: `{rounded}%`"
-        
+
     return "\n".join(
         [
             start_marker,
