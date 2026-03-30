@@ -6,17 +6,19 @@ on:
       - ".github/workflows/coverage.yml"
       - ".github/scripts/update_readme_coverage.py"
       - "README.md"
-      - "requirements.txt"
-      - "agd/**"
-      - "modal/**"
+      - "pyproject.toml"
+      - "src/agdg/**"
+      - "modal_run/**"
+      - "tests/**"
   push:
     paths:
       - ".github/workflows/coverage.yml"
       - ".github/scripts/update_readme_coverage.py"
       - "README.md"
-      - "requirements.txt"
-      - "agd/**"
-      - "modal/**"
+      - "pyproject.toml"
+      - "src/agdg/**"
+      - "modal_run/**"
+      - "tests/**"
 
 permissions:
   contents: write
@@ -36,37 +38,23 @@ jobs:
       - name: Install test dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt -r modal/requirements-test.txt -r agd/requirements-test.txt
+          python -m pip install .
 
       - name: Run modal tests with coverage
-        working-directory: modal
         run: |
           pytest \
-            --cov=aws \
-            --cov=config \
-            --cov=data_pipeline.clean \
-            --cov=data_pipeline.eval \
-            --cov=data_pipeline.main \
-            --cov=data_pipeline.preprocess_charts \
-            .
-          mv .coverage ../.coverage.modal
+            --cov=modal_run
+          mv .coverage .coverage.modal
 
       - name: Run AGD tests with coverage
-        working-directory: agd
         run: |
           pytest \
-            --cov=agd.scoring.eval \
-            --cov=agd.core.attack \
-            --cov=agd.core.models.clip_target \
-            --cov=agd.core.attacks.attackvlm \
-            --cov=agd.core.models.clip_target \
-            --cov=agd.attackvlm_adapter \
-            .
-          mv .coverage ../.coverage.agd
+            --cov=agdg
+          mv .coverage .coverage.agdg
 
       - name: Coverage report
         run: |
-          python -m coverage combine .coverage.modal .coverage.agd
+          python -m coverage combine .coverage.modal .coverage.agdg
           python -m coverage report -m
           python -m coverage xml -o coverage.xml
           python -m coverage json -o coverage.json
