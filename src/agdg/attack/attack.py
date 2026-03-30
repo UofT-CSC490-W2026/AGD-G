@@ -15,7 +15,7 @@ from agdg.attack.surrogates.clip import (
     TextCLIPModel,
     PatchTextCLIPModel
 )
-from .models.llava_target import LlavaTextTargetModel
+from .surrogates.llava_target import LlavaTextTargetModel
 
 import os
 import shutil

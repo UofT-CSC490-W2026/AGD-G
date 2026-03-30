@@ -14,7 +14,7 @@ import torch
 import torch.nn.functional as F
 from PIL import Image
 
-from ..interfaces import TextTargetModel
+from .base import TextTargetModel
 
 
 class LlavaTextTargetModel(TextTargetModel):
