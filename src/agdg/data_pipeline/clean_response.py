@@ -16,7 +16,8 @@ from agdg.data_pipeline.aws import rds, s3
 if TYPE_CHECKING:
     import torch
 
-BATCH_SIZE = 100
+DB_COMMIT_SIZE = 100
+INFERENCE_BATCH_SIZE = 8
 DEFAULT_MODEL_ID = "llava-hf/llava-1.5-7b-hf"
 DEFAULT_PROMPT = "What is the graph about?"
 
@@ -96,6 +97,40 @@ def _prepare_inputs(
     return inputs, rendered_prompt
 
 
+def generate_batch_responses(
+    *,
+    processor: object,
+    model: object,
+    model_id: str,
+    images: list,
+    prompt: str = DEFAULT_PROMPT,
+    device: str,
+    dtype: object,
+    max_new_tokens: int = 256,
+) -> list[str]:
+    import torch
+
+    if "llava" in model_id.lower():
+        conversation = [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": prompt}]}]
+        rendered_prompt = processor.apply_chat_template(conversation, add_generation_prompt=True, tokenize=False)
+        texts = [rendered_prompt] * len(images)
+        inputs = processor(images=images, text=texts, return_tensors="pt", padding=True).to(device)
+    else:
+        inputs = processor(images=images, text=[prompt] * len(images), return_tensors="pt", padding=True).to(device)
+
+    if dtype == torch.float16 and "pixel_values" in inputs:
+        inputs["pixel_values"] = inputs["pixel_values"].to(dtype)
+
+    with torch.no_grad():
+        output_ids = model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=False)
+
+    if "llava" in model_id.lower():
+        prompt_len = inputs["input_ids"].shape[1]
+        output_ids = output_ids[:, prompt_len:]
+
+    return [d.strip() for d in processor.batch_decode(output_ids, skip_special_tokens=True)]
+
+
 def generate_image_response(
     *,
     processor: object,
@@ -127,7 +162,11 @@ def generate_image_response(
     return decoded.strip()
 
 
-def generate_clean_responses(max_rows: int = 0, model_id: str = DEFAULT_MODEL_ID):
+def generate_clean_responses(
+    max_rows: int = 0,
+    model_id: str = DEFAULT_MODEL_ID,
+    batch_size: int = INFERENCE_BATCH_SIZE,
+):
     """Caption every preprocessed chart that lacks a clean answer for *model_id*."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     log = logging.getLogger("clean_response")
@@ -162,31 +201,41 @@ def generate_clean_responses(max_rows: int = 0, model_id: str = DEFAULT_MODEL_ID
     processed = 0
     with rds.get_db_connection() as conn:
         with conn.cursor() as cur:
-            for sample_id, clean_chart in rows:
+            for batch_start in range(0, len(rows), batch_size):
+                batch = rows[batch_start:batch_start + batch_size]
+                images, valid_ids = [], []
+                for sample_id, clean_chart in batch:
+                    try:
+                        images.append(Image.open(io.BytesIO(s3.get_image(clean_chart))).convert("RGB"))
+                        valid_ids.append(sample_id)
+                    except Exception as exc:
+                        log.error("Error fetching sample %s: %s", sample_id, exc)
+                if not images:
+                    continue
                 try:
-                    answer = generate_image_response(
+                    answers = generate_batch_responses(
                         processor=processor,
                         model=model,
                         model_id=model_id,
-                        image_bytes=s3.get_image(clean_chart),
+                        images=images,
                         prompt=DEFAULT_PROMPT,
                         device=device,
                         dtype=dtype,
                     )
-                    cur.execute(
-                        """
-                        INSERT INTO clean_answers (sample_id, clean_answer_model, clean_answer)
-                        VALUES (%s, %s, %s)
-                        ON CONFLICT (sample_id, clean_answer_model) DO NOTHING
-                        """,
-                        (sample_id, model_id, answer),
-                    )
-                    processed += cur.rowcount
-                    if processed and processed % BATCH_SIZE == 0:
-                        conn.commit()
-                        log.info("  Processed %s/%s", processed, len(rows))
+                    for sample_id, answer in zip(valid_ids, answers):
+                        cur.execute(
+                            """
+                            INSERT INTO clean_answers (sample_id, clean_answer_model, clean_answer)
+                            VALUES (%s, %s, %s)
+                            ON CONFLICT (sample_id, clean_answer_model) DO NOTHING
+                            """,
+                            (sample_id, model_id, answer),
+                        )
+                        processed += cur.rowcount
+                    conn.commit()
+                    log.info("  Processed %s/%s", min(batch_start + batch_size, len(rows)), len(rows))
                 except Exception as exc:
-                    log.error("Error processing sample %s: %s", sample_id, exc)
+                    log.error("Error in batch %s-%s: %s", batch_start, batch_start + batch_size, exc)
 
     log.info("Done: %s samples processed", processed)
     return {"processed": processed}

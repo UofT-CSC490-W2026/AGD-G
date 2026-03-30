@@ -21,8 +21,8 @@ app = modal.App(
     "agd-target-pipeline",
     image=build_data_pipeline_image(),
     secrets=[
-        modal.Secret.from_name("aws-secret"),
-        modal.Secret.from_name("aws-rds"),
+        modal.Secret.from_name("aws"),
+        # modal.Secret.from_name("aws-rds"),
         modal.Secret.from_name("huggingface"),
     ],
 )
@@ -54,15 +54,27 @@ def preview_targets(
     )
 
 
+@app.function(timeout=60)
+def fix_bad_targets(strategy: str = "qwen"):
+    from agdg.data_pipeline.aws.rds import delete_bad_targets
+    return delete_bad_targets(strategy)
+
+
 @app.local_entrypoint()
 def main(
-    max_rows: int = 0,
+    limit: int = 0,
     strategy: str = "qwen",
     source: str | None = None,
     batch_size: int = 100,
     preview: bool = False,
     per_source: int = 10,
+    fix_bad: bool = False,
 ):
+    if fix_bad:
+        deleted = fix_bad_targets.remote(strategy=strategy)
+        print(f"Deleted {deleted} bad target_answers for strategy={strategy!r}")
+        return
+
     if preview:
         results = preview_targets.remote(per_source=per_source, strategy=strategy)
         for r in results:
@@ -71,7 +83,7 @@ def main(
             print(f"  Target:   {r['target']}\n")
     else:
         r = generate_targets.remote(
-            max_rows=max_rows,
+            max_rows=limit,
             strategy=strategy,
             source=source,
             batch_size=batch_size,

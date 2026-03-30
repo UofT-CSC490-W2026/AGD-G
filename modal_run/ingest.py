@@ -31,6 +31,7 @@ def ingest(
     clean: bool = False,
     skip_import: bool = False,
     skip_preprocess: bool = False,
+    source: str | None = None,
 ):
     import logging
 
@@ -42,14 +43,17 @@ def ingest(
         do_clean()
 
     if not skip_import:
-        log.info("=== Import ChartBench ===")
-        import_chartbench(max_rows=max_rows)
+        if source is None or source == "ChartBench":
+            log.info("=== Import ChartBench ===")
+            import_chartbench(max_rows=max_rows)
 
-        log.info("=== Import ChartX ===")
-        import_chartx(max_rows=max_rows or None)
+        if source is None or source == "ChartX":
+            log.info("=== Import ChartX ===")
+            import_chartx(max_rows=max_rows or None)
 
-        log.info("=== Import ChartQA-X ===")
-        import_chartqax(max_rows=max_rows or None)
+        if source is None or source == "ChartQA-X":
+            log.info("=== Import ChartQA-X ===")
+            import_chartqax(max_rows=max_rows or None)
 
     if not skip_preprocess:
         log.info("=== Preprocess ===")
@@ -65,10 +69,12 @@ def main(
     clean: bool = False,
     skip_import: bool = False,
     skip_preprocess: bool = False,
+    source: str | None = None,
 ):
     ingest.remote(
         max_rows=limit,
         clean=clean,
         skip_import=skip_import,
         skip_preprocess=skip_preprocess,
+        source=source,
     )

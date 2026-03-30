@@ -1,13 +1,34 @@
 """Sentence-similarity helpers for comparing VLM outputs against reference texts."""
 
 
-def determine_winner(score_a: float, score_b: float, cutoff_score: float = 0.5, margin: float = 0.02) -> str:
+def determine_winner(
+    score_a: float,
+    score_b: float,
+    cutoff_score: float = 0.5,
+    margin: float = 0.02,
+    drift_weight: float = 0.7,
+    target_weight: float = 0.3,
+) -> str:
     """
     Determines the winning text based on similarity scores.
+
+    The primary signal is whether the adversarial output has drifted away from
+    the clean answer (low score_a). Closeness to the target caption (high score_b)
+    adds a bonus but is not required for a successful attack.
+
+    attack_score = drift_weight * (1 - score_a) + target_weight * score_b
+    clean_score  = drift_weight * score_a        + target_weight * (1 - score_b)
+
+    Returns "Neither" if attack_score < cutoff_score (drift was not meaningful).
+    Returns "Tie" if the two composite scores are within margin of each other.
+    Returns "B" if attack_score > clean_score (attack succeeded).
+    Returns "A" otherwise (output stayed close to clean).
 
     >>> determine_winner(0.90, 0.50)
     'A'
     >>> determine_winner(0.50, 0.90)
+    'B'
+    >>> determine_winner(0.30, 0.40)
     'B'
     >>> determine_winner(0.60, 0.70, cutoff_score=0.75)
     'Neither'
@@ -16,16 +37,16 @@ def determine_winner(score_a: float, score_b: float, cutoff_score: float = 0.5, 
     >>> determine_winner(0.85, 0.82, margin=0.02)
     'A'
     """
-    if score_a < cutoff_score and score_b < cutoff_score:
+    attack_score = drift_weight * (1 - score_a) + target_weight * score_b
+    clean_score  = drift_weight * score_a        + target_weight * (1 - score_b)
+
+    if attack_score < cutoff_score:
         return "Neither"
-        
-    if abs(score_a - score_b) <= margin:
+
+    if abs(attack_score - clean_score) <= margin:
         return "Tie"
-        
-    if score_a > score_b:
-        return "A"
-    else:
-        return "B"
+
+    return "B" if attack_score > clean_score else "A"
 
 def get_device():
     """

@@ -41,27 +41,54 @@ def generate_target_responses(
     processed = 0
     with rds.get_db_connection() as conn:
         with conn.cursor() as cur:
+            pending: list = []
             for row in rds.iter_target_inputs(conn, targeting_strategy, source=source):
-                if max_rows > 0 and processed >= max_rows:
+                if max_rows > 0 and processed + len(pending) >= max_rows:
                     break
-                clean_answer_id = row["clean_answer_id"]
-                clean_answer = row["clean_answer"]
-                clean_chart = row["clean_chart"]
-                clean_image = Image.open(io.BytesIO(s3.get_image(clean_chart))).convert("RGB")
-                try:
-                    targets = targeter([clean_image], [clean_answer])
-                    rds.insert_target_answer(
-                        cur,
-                        clean_answer_id,
-                        targets[0],
-                        targeting_strategy,
-                    )
-                    processed += cur.rowcount
-                    if processed and processed % batch_size == 0:
+                pending.append(row)
+                if len(pending) < batch_size:
+                    continue
+
+                images, valid = [], []
+                for r in pending:
+                    try:
+                        images.append(Image.open(io.BytesIO(s3.get_image(r["clean_chart"]))).convert("RGB"))
+                        valid.append(r)
+                    except Exception as exc:
+                        log.error("Error fetching chart %s: %s", r["clean_answer_id"], exc)
+                pending = []
+
+                if images:
+                    try:
+                        targets = targeter(images, [r["clean_answer"] for r in valid])
+                        for r, target in zip(valid, targets):
+                            log.info("  [%s] clean=%r -> target=%r", r["clean_answer_id"], r["clean_answer"], target)
+                            rds.insert_target_answer(cur, r["clean_answer_id"], target, targeting_strategy)
+                            processed += cur.rowcount
                         conn.commit()
                         log.info("  Processed %s", processed)
-                except Exception as exc:
-                    log.error("Error processing sample %s: %s", clean_answer_id, exc)
+                    except Exception as exc:
+                        log.error("Error in batch: %s", exc)
+
+            # flush remaining
+            if pending:
+                images, valid = [], []
+                for r in pending:
+                    try:
+                        images.append(Image.open(io.BytesIO(s3.get_image(r["clean_chart"]))).convert("RGB"))
+                        valid.append(r)
+                    except Exception as exc:
+                        log.error("Error fetching chart %s: %s", r["clean_answer_id"], exc)
+                if images:
+                    try:
+                        targets = targeter(images, [r["clean_answer"] for r in valid])
+                        for r, target in zip(valid, targets):
+                            log.info("  [%s] clean=%r -> target=%r", r["clean_answer_id"], r["clean_answer"], target)
+                            rds.insert_target_answer(cur, r["clean_answer_id"], target, targeting_strategy)
+                            processed += cur.rowcount
+                        conn.commit()
+                    except Exception as exc:
+                        log.error("Error in final batch: %s", exc)
 
     log.info("Done: %s samples processed", processed)
     return {"processed": processed}
