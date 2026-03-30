@@ -27,7 +27,7 @@ and the correctness of auxiliary features like EOT and masking.
 from abc import ABC, abstractmethod
 import logging
 import tempfile
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 import re
 import numpy as np
 import torch

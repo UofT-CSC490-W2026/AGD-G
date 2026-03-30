@@ -2,8 +2,22 @@
 Modal script to run the test attack. Not set up for AWS integration or production at all.
 """
 import modal
-from agdg.attack.attack import attack
-from modal_run.image import build_image
+try:
+    import sys
+    import os
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from agd.core.attack import attack
+except (ImportError, ModuleNotFoundError):
+    from core.attack import attack
+
+modal_image = (
+    modal.Image.debian_slim(python_version="3.11")
+    .uv_pip_install("torch", "transformers", "pillow", "tqdm", "accelerate")
+    .add_local_file("xray-fish-profile.png", "/root/clean_image.png", copy=True)
+    .add_local_file("data_viz.png", "/root/data_viz.png", copy=True)
+    .add_local_file("target.jpg", "/root/target.jpg", copy=True)
+    .add_local_python_source("core", copy=False)
+)
 
 hf_volume = modal.Volume.from_name("huggingface-cache", create_if_missing=True)
 image_volume = modal.Volume.from_name("agd_images", create_if_missing=True)
