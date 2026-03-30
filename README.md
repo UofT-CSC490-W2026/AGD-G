@@ -118,7 +118,7 @@ sentence embeddings and cosine similarity. An attack **succeeds** when the VLM's
 semantically closer to the target caption than to the clean caption.
 
 ```
-modal run modal_run/evaluate.py -- --mode evaluate
+modal run modal_run/evaluate.py --mode evaluate
 ```
 
 | Flag | Effect |
