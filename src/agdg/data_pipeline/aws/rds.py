@@ -1,9 +1,9 @@
+import os
 from typing import Dict, Optional
 from pathlib import Path
 from uuid import UUID, uuid4
 from contextlib import contextmanager
 
-import boto3
 import psycopg2
 try:
     from psycopg2.extras import Json
@@ -13,12 +13,29 @@ except Exception:  # pragma: no cover
 
 from agdg.data_pipeline.chart_type import ChartType
 
-AWS_REGION='ca-central-1'
-RDS_HOST='agd-dev-postgres.cdsyi46ammw7.ca-central-1.rds.amazonaws.com'
-RDS_PORT=5432
-RDS_USER='modal_user'
+AWS_REGION = os.environ.get("AGDG_AWS_REGION", "ca-central-1")
+RDS_HOST = os.environ.get("AGDG_DB_HOST", "agd-dev-postgres.cdsyi46ammw7.ca-central-1.rds.amazonaws.com")
+RDS_PORT = int(os.environ.get("AGDG_DB_PORT", "5432"))
+RDS_USER = os.environ.get("AGDG_DB_USER", "modal_user")
+RDS_DB = os.environ.get("AGDG_DB_NAME", "postgres")
+RDS_SSLMODE = os.environ.get("AGDG_DB_SSLMODE", "require")
 
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
+
+
+def _get_password() -> str:
+    """Return a DB password from env var or generate an IAM auth token."""
+    static_pw = os.environ.get("AGDG_DB_PASSWORD")
+    if static_pw is not None:
+        return static_pw
+    import boto3
+    client = boto3.client("rds", region_name=AWS_REGION)
+    return client.generate_db_auth_token(
+        DBHostname=RDS_HOST,
+        Port=RDS_PORT,
+        DBUsername=RDS_USER,
+    )
+
 
 @contextmanager
 def get_db_connection():
@@ -26,22 +43,19 @@ def get_db_connection():
     Make a connection to the RDS PostgreSQL database.
     Use `with get_db_connection() as conn:` and it will automatically
     close when the `with` block ends.
+
+    When AGDG_DB_PASSWORD is set, uses that directly (for local Postgres).
+    Otherwise falls back to AWS IAM token authentication.
     """
     conn = None
-    client = boto3.client("rds", region_name=AWS_REGION)
-    token = client.generate_db_auth_token(
-        DBHostname=RDS_HOST,
-        Port=RDS_PORT,
-        DBUsername=RDS_USER,
-    )
     try:
         conn = psycopg2.connect(
             host=RDS_HOST,
             port=RDS_PORT,
-            database='postgres',
+            database=RDS_DB,
             user=RDS_USER,
-            password=token,
-            sslmode='require'
+            password=_get_password(),
+            sslmode=RDS_SSLMODE,
         )
         yield conn
         conn.commit()
