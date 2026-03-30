@@ -17,8 +17,10 @@ dependencies = [
 	"sentence-transformers",
 	"tf-keras",
 	"torch",
+	"torchvision",
 	"tqdm",
-	"transformers",
+	"transformers>=4.49.0",
+	"qwen-vl-utils",
 ]
 
 [tool.setuptools.packages.find]

@@ -224,9 +224,14 @@ def iter_clean_answer_inputs(conn, model_name, batch_size=100):
                     "clean_chart": clean_chart,
                 }
 
-def iter_target_inputs(conn, strategy, batch_size=100):
+def iter_target_inputs(conn, strategy, source=None, batch_size=100):
+    source_clause = "AND s.chart_source = %s" if source else ""
+    params = [strategy]
+    if source:
+        params.append(source)
+
     with conn.cursor() as cur:
-        cur.execute("""
+        cur.execute(f"""
             SELECT ca.id, ca.clean_answer, s.clean_chart
             FROM clean_answers ca
             JOIN samples s ON s.id = ca.sample_id
@@ -234,7 +239,8 @@ def iter_target_inputs(conn, strategy, batch_size=100):
               ON ta.clean_answer_id = ca.id
              AND ta.target_strategy = %s
             WHERE ta.id IS NULL
-        """, (strategy,))
+              {source_clause}
+        """, tuple(params))
 
         while True:
             rows = cur.fetchmany(batch_size)
@@ -247,6 +253,45 @@ def iter_target_inputs(conn, strategy, batch_size=100):
                     "clean_answer": clean_answer,
                     "clean_chart": clean_chart,
                 }
+
+
+DATASET_SOURCES = ("ChartBench", "ChartX", "ChartQA-X")
+
+
+def iter_target_inputs_sampled(conn, strategy, per_source: int = 10):
+    """
+    Yield up to *per_source* rows from each dataset source that do not yet
+    have a target answer for *strategy*.  Rows are returned source-by-source
+    in insertion order (ORDER BY ca.id).
+    """
+    union_parts = []
+    params: list = []
+    for src in DATASET_SOURCES:
+        union_parts.append("""
+            (SELECT ca.id, ca.clean_answer, s.clean_chart, s.chart_source
+             FROM clean_answers ca
+             JOIN samples s ON s.id = ca.sample_id
+             LEFT JOIN target_answers ta
+               ON ta.clean_answer_id = ca.id
+              AND ta.target_strategy = %s
+             WHERE ta.id IS NULL
+               AND s.chart_source = %s
+             ORDER BY ca.id
+             LIMIT %s)
+        """)
+        params.extend([strategy, src, per_source])
+
+    query = " UNION ALL ".join(union_parts)
+
+    with conn.cursor() as cur:
+        cur.execute(query, tuple(params))
+        for clean_answer_id, clean_answer, clean_chart, chart_source in cur.fetchall():
+            yield {
+                "clean_answer_id": clean_answer_id,
+                "clean_answer": clean_answer,
+                "clean_chart": clean_chart,
+                "chart_source": chart_source,
+            }
 
 def iter_attack_inputs(conn, attack_method, target_surrogate, batch_size=100):
     with conn.cursor() as cur:
