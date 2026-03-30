@@ -8,4 +8,3 @@ provider "postgresql" {
   password = var.db_password
   sslmode  = "require"
 }
-
