@@ -1,8 +1,10 @@
-
 import pytest
-import torch
 import numpy as np
 from PIL import Image
+from tests.helpers.torch_guard import require_torch
+
+torch = require_torch()
+
 from agdg.attack.methods.attackvlm import AttackVLMGraphTopic
 
 class MockTextTargetModel:

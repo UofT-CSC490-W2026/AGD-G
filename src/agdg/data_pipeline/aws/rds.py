@@ -5,7 +5,11 @@ from contextlib import contextmanager
 
 import boto3
 import psycopg2
-from psycopg2.extras import Json
+try:
+    from psycopg2.extras import Json
+except Exception:
+    def Json(value):
+        return value
 
 from agdg.data_pipeline.chart_type import ChartType
 

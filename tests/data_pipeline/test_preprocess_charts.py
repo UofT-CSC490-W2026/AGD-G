@@ -122,13 +122,6 @@ def _build_fake_aws(raw_uuids, updates, *, missing_keys=None):
         def __init__(self):
             self.rowcount = 2
 
-        def execute(self, query, params=None):
-            if query.lstrip().startswith("UPDATE"):
-                updates.append(params)
-
-        def fetchall(self):
-            return [(raw_uuid,) for raw_uuid in raw_uuids]
-
         def __enter__(self):
             return self
 
@@ -138,9 +131,10 @@ def _build_fake_aws(raw_uuids, updates, *, missing_keys=None):
     class FakeConnection:
         def __init__(self):
             self.commits = 0
+            self.cursor_obj = FakeCursor()
 
         def cursor(self):
-            return FakeCursor()
+            return self.cursor_obj
 
         def commit(self):
             self.commits += 1
@@ -163,15 +157,26 @@ def _build_fake_aws(raw_uuids, updates, *, missing_keys=None):
     factory = FakeConnectionFactory()
 
     fake_aws = types.ModuleType("agdg.data_pipeline.aws")
-    fake_aws.get_db_connection = factory
+    fake_aws.rds = types.SimpleNamespace(
+        get_db_connection=factory,
+        iter_preprocessor_inputs=lambda conn: [
+            {"sample_id": idx + 1, "raw_chart": raw_uuid}
+            for idx, raw_uuid in enumerate(raw_uuids)
+        ],
+        insert_preprocessing=lambda cur, sample_id, chart, original_width, original_height, meta: updates.append(
+            (str(chart), sample_id, original_width, original_height, meta)
+        ),
+    )
 
     def get_image(key):
         if key in missing_keys:
             raise KeyError(key)
         return b"raw-image"
 
-    fake_aws.get_image = get_image
-    fake_aws.put_image = lambda image: "processed-uuid"
+    fake_aws.s3 = types.SimpleNamespace(
+        get_image=get_image,
+        put_image=lambda image: "processed-uuid",
+    )
     return fake_aws, factory
 
 
@@ -179,7 +184,8 @@ def test_preprocess_all_updates_rows_with_processed_images(monkeypatch):
     module = _load_module(monkeypatch)
     updates = []
     fake_aws, _ = _build_fake_aws(["raw-1"], updates)
-    monkeypatch.setattr(module, "aws", fake_aws)
+    monkeypatch.setattr(module, "rds", fake_aws.rds)
+    monkeypatch.setattr(module, "s3", fake_aws.s3)
     monkeypatch.setattr(
         module,
         "preprocess_single",
@@ -202,7 +208,8 @@ def test_preprocess_all_returns_zero_when_nothing_to_process(monkeypatch):
     module = _load_module(monkeypatch)
     updates = []
     fake_aws, _ = _build_fake_aws([], updates)
-    monkeypatch.setattr(module, "aws", fake_aws)
+    monkeypatch.setattr(module, "rds", fake_aws.rds)
+    monkeypatch.setattr(module, "s3", fake_aws.s3)
 
     result = module.preprocess_all()
 
@@ -214,7 +221,8 @@ def test_preprocess_all_skips_missing_and_corrupt_images(monkeypatch):
     module = _load_module(monkeypatch)
     updates = []
     fake_aws, _ = _build_fake_aws(["missing", "corrupt"], updates, missing_keys={"missing"})
-    monkeypatch.setattr(module, "aws", fake_aws)
+    monkeypatch.setattr(module, "rds", fake_aws.rds)
+    monkeypatch.setattr(module, "s3", fake_aws.s3)
     monkeypatch.setattr(module, "preprocess_single", lambda img_bytes: None)
 
     result = module.preprocess_all()
@@ -228,7 +236,8 @@ def test_preprocess_all_commits_batch_updates(monkeypatch):
     module.BATCH_SIZE = 1
     updates = []
     fake_aws, factory = _build_fake_aws(["raw-1"], updates)
-    monkeypatch.setattr(module, "aws", fake_aws)
+    monkeypatch.setattr(module, "rds", fake_aws.rds)
+    monkeypatch.setattr(module, "s3", fake_aws.s3)
     monkeypatch.setattr(
         module,
         "preprocess_single",
@@ -243,4 +252,4 @@ def test_preprocess_all_commits_batch_updates(monkeypatch):
     result = module.preprocess_all()
 
     assert result["unique_images"] == 1
-    assert factory.connections[1].commits == 1
+    assert factory.connections[0].commits == 1

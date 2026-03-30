@@ -42,8 +42,23 @@ def test_attack_calls_pipeline(monkeypatch):
     monkeypatch.setattr(
         module,
         "attack_all",
-        lambda max_rows=0: {"attacked": 5, "rows_updated": 10},
+        lambda **kwargs: {"attacked": 5, "rows_updated": 10},
     )
 
     result = module.attack(max_rows=0)
     assert result == {"attacked": 5, "rows_updated": 10}
+
+
+def test_main_prints_remote_results(monkeypatch, capsys):
+    module = _load(monkeypatch)
+
+    def fake_remote(**kwargs):
+        return {"attacked": 2, "rows_updated": 2}
+
+    module.attack.remote = fake_remote
+
+    module.main(limit=2, steps=20, strategy="smoke-fast")
+
+    out = capsys.readouterr().out
+    assert "attacked" in out
+    assert "rows_updated" in out

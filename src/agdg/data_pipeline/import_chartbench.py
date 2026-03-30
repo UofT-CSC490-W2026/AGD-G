@@ -1,5 +1,3 @@
-from datasets import load_dataset
-from huggingface_hub import hf_hub_download
 import os
 import logging
 import shutil
@@ -29,6 +27,9 @@ CHARTBENCH_TYPE_MAP: dict[str, ChartType] = {
 
 
 def import_chartbench(max_rows: int = 0, clean: bool = False):
+    from datasets import load_dataset
+    from huggingface_hub import hf_hub_download
+
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     log = logging.getLogger("import_chartbench")
 

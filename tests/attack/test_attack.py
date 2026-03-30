@@ -76,10 +76,12 @@ def setup_fakes(monkeypatch):
     monkeypatch.setattr(attack_module, "TextCLIPModel", FakeTargetModel)
     monkeypatch.setattr(attack_module, "PatchTextCLIPModel", FakeTargetModel)
     monkeypatch.setattr(attack_module, "ImageCLIPModel", FakeTargetModel)
+    monkeypatch.setattr(attack_module, "LlavaTextTargetModel", FakeTargetModel)
     monkeypatch.setattr(attack_module, "AttackVLMText", FakeTextAttacker)
     monkeypatch.setattr(attack_module, "AttackVLMOCR", FakeTextAttacker)
     monkeypatch.setattr(attack_module, "AttackVLMImage", FakeImageAttacker)
     monkeypatch.setattr(attack_module, "AttackVLMUntargeted", FakeUntargetedAttacker)
+    monkeypatch.setattr(attack_module, "_get_device", lambda device=None: "cpu")
     monkeypatch.setattr(attack_module.Image, "open", lambda path: f"opened:{path}")
 
 

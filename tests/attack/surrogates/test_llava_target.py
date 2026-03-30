@@ -1,8 +1,10 @@
-
 import pytest
-import torch
 from unittest.mock import MagicMock, patch
 from PIL import Image
+from tests.helpers.torch_guard import require_torch
+
+torch = require_torch()
+
 from agdg.attack.surrogates.llava_target import LlavaTextTargetModel
 
 @pytest.fixture

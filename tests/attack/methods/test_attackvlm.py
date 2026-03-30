@@ -52,11 +52,14 @@ This test suite provides comprehensive coverage (100%) of attackvlm.py through
 """
 
 import pytest
-import torch
 import numpy as np
 from PIL import Image
 from collections.abc import Sequence
 from pathlib import Path
+from tests.helpers.torch_guard import require_torch
+
+torch = require_torch()
+
 from agdg.attack.methods.attackvlm import (
     AttackVLMUntargeted,
     AttackVLMImage,

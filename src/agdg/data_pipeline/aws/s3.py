@@ -1,5 +1,6 @@
 from uuid import UUID, uuid4
 import boto3
+from botocore.exceptions import ClientError
 
 IMAGE_PREFIX='samples/'
 IMAGE_POSTFIX='.png'

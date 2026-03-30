@@ -67,16 +67,26 @@ class FakeConnection:
 
 
 def build_fake_aws(*, inserts=None, put_returns="fake-uuid"):
-    """Return (fake_aws_module, put_calls) for use with monkeypatch.setattr(module, 'aws', ...)."""
+    """Return a fake aws package shim plus captured S3 calls and fake DB connection."""
     inserts = inserts if inserts is not None else []
     put_calls = []
     conn = FakeConnection(FakeCursor(inserts))
 
     fake = types.ModuleType("agdg.data_pipeline.aws")
-    fake.wipe_s3 = MagicMock()
-    fake.wipe_rds = MagicMock()
-    fake.create_table_if_not_exists = MagicMock()
-    fake.put_image = lambda data: (put_calls.append(data), put_returns)[1]
-    fake.add_sample = MagicMock()
-    fake.get_db_connection = lambda: conn
+    fake.rds = types.SimpleNamespace(
+        wipe_rds=MagicMock(),
+        create_table_if_not_exists=MagicMock(),
+        get_db_connection=lambda: conn,
+        insert_sample=MagicMock(),
+    )
+    fake.s3 = types.SimpleNamespace(
+        wipe_s3=MagicMock(),
+        put_image=lambda data: (put_calls.append(data), put_returns)[1],
+    )
+    fake.wipe_s3 = fake.s3.wipe_s3
+    fake.wipe_rds = fake.rds.wipe_rds
+    fake.create_table_if_not_exists = fake.rds.create_table_if_not_exists
+    fake.put_image = fake.s3.put_image
+    fake.add_sample = fake.rds.insert_sample
+    fake.get_db_connection = fake.rds.get_db_connection
     return fake, put_calls, conn
