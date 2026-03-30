@@ -46,7 +46,7 @@ upload the cleaned PNG. This step is included in the ingest job by default, but 
 own:
 
 ```
-modal run modal_run/ingest.py -- --skip-import
+modal run modal_run/ingest.py --skip-import
 ```
 
 ### 3. Clean caption
@@ -55,7 +55,7 @@ Run a VLM on each preprocessed chart to produce a baseline ("clean") caption tha
 the chart actually shows. The default model is [LLaVA][llava] 1.5-7B.
 
 ```
-modal run modal_run/evaluate.py -- --mode clean
+modal run modal_run/evaluate.py --mode clean
 ```
 
 | Flag | Effect |
@@ -71,7 +71,7 @@ A targeting strategy takes each chart image and its clean caption, then generate
 prompting.
 
 ```
-modal run modal_run/target.py -- --strategy qwen
+modal run modal_run/target.py --strategy qwen
 ```
 
 | Flag | Effect |
