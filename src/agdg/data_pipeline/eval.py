@@ -8,12 +8,13 @@ from sentence_transformers import SentenceTransformer
 
 from agdg.data_pipeline.aws import get_db_connection, get_image
 from agdg.scoring.similarity import evaluate_similarity, get_device
+from agdg.data_pipeline.aws import rds, s3
 
 BATCH_SIZE = 100
 SIMILARITY_MODEL_ID = "all-MiniLM-L6-v2"
 
 
-def evaluate_all(max_rows: int = 0):
+def evaluate_all(model_name: str, max_rows: int = 0):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     log = logging.getLogger("evaluate")
 
@@ -49,7 +50,7 @@ def evaluate_all(max_rows: int = 0):
     evaluated = 0
     winners = {"A": 0, "B": 0, "Tie": 0, "Neither": 0}
 
-    with get_db_connection() as conn:
+    with rds.get_db_connection() as conn:
         with conn.cursor() as cur:
             for sid, clean_caption, target_text, output_answer in rows:
                 if not output_answer or not clean_caption or not target_text:

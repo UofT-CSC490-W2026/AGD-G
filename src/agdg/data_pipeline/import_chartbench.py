@@ -1,5 +1,12 @@
-from agdg.data_pipeline import aws
-from agdg.data_pipeline.schema import GraphType
+from datasets import load_dataset
+from huggingface_hub import hf_hub_download
+import os
+import logging
+import shutil
+import zipfile
+
+from agdg.data_pipeline.aws import s3, rds
+from agdg.data_pipeline.chart_type import ChartType
 
 HF_DATASET_ID = "SincereX/ChartBench"
 HF_SUBSET = "chart_bench"
@@ -8,37 +15,30 @@ HF_IMAGE_ZIP = "data/test.zip"
 
 BATCH_SIZE = 100
 
-CHARTBENCH_TYPE_MAP: dict[str, GraphType] = {
-    "area":        GraphType.AREA,
-    "bar":         GraphType.BAR,
-    "box":         GraphType.BOX,
-    "combination": GraphType.OTHER,
-    "line":        GraphType.LINE,
-    "node_link":   GraphType.NODE,
-    "pie":         GraphType.PIE,
-    "radar":       GraphType.RADAR,
-    "scatter":     GraphType.SCATTER,
+CHARTBENCH_TYPE_MAP: dict[str, ChartType] = {
+    "area":        ChartType.AREA,
+    "bar":         ChartType.BAR,
+    "box":         ChartType.BOX,
+    "combination": ChartType.OTHER,
+    "line":        ChartType.LINE,
+    "node_link":   ChartType.NODE,
+    "pie":         ChartType.PIE,
+    "radar":       ChartType.RADAR,
+    "scatter":     ChartType.SCATTER,
 }
 
 
 def import_chartbench(max_rows: int = 0, clean: bool = False):
-    from datasets import load_dataset
-    from huggingface_hub import hf_hub_download
-    import os
-    import logging
-    import shutil
-    import zipfile
-
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     log = logging.getLogger("import_chartbench")
 
     if clean:
         log.info("CLEANING...")
-        aws.wipe_s3(logger=log)
-        aws.wipe_rds()
+        s3.wipe_s3(logger=log)
+        rds.wipe_rds()
         log.info("Clean done\n")
 
-    aws.create_table_if_not_exists()
+    rds.create_table_if_not_exists()
     log.info("Schema ready")
 
     log.info(f"Downloading {HF_IMAGE_ZIP} from {HF_DATASET_ID} ...")
@@ -62,7 +62,7 @@ def import_chartbench(max_rows: int = 0, clean: bool = False):
     skipped = 0
     unmapped_types: set[str] = set()
 
-    with aws.get_db_connection() as conn:
+    with rds.get_db_connection() as conn:
         with conn.cursor() as cursor:
             for i, row in enumerate(ds):
                 if i >= total:
@@ -76,7 +76,7 @@ def import_chartbench(max_rows: int = 0, clean: bool = False):
                     if chart_type_raw not in unmapped_types:
                         log.warning(f"  Unknown chart type '{chart_type_raw}' → OTHER")
                         unmapped_types.add(chart_type_raw)
-                    graph_type = GraphType.OTHER
+                    graph_type = ChartType.OTHER
 
                 if img_path not in uploaded:
                     relative_img_path = img_path.replace("./data/", "")
@@ -88,13 +88,13 @@ def import_chartbench(max_rows: int = 0, clean: bool = False):
                         continue
 
                     with open(local_src, "rb") as f:
-                        image_uuid = aws.put_image(f.read())
+                        image_uuid = s3.put_image(f.read())
 
                     uploaded[img_path] = str(image_uuid)
 
                 image_uuid_str = uploaded[img_path]
 
-                aws.add_sample(
+                rds.insert_sample(
                     cursor,
                     "ChartBench",
                     str(graph_type),

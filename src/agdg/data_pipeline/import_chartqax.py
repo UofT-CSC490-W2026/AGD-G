@@ -2,8 +2,8 @@
 ChartQAx data pipeline: loads ChartQA-X from Hugging Face, processes chart images
 and QA pairs, and writes metadata to RDS and images to S3.
 """
-from agdg.data_pipeline import aws
-from agdg.data_pipeline.schema import GraphType
+from agdg.data_pipeline.aws import rds, s3
+from agdg.data_pipeline.chart_type import ChartType
 
 
 def import_chartqax(max_rows: int | None = None):
@@ -13,7 +13,7 @@ def import_chartqax(max_rows: int | None = None):
     import zipfile
     import os
 
-    aws.create_table_if_not_exists()
+    rds.create_table_if_not_exists()
 
     repo_id = "shamanthakhegde/ChartQA-X"
     ds = load_dataset(repo_id)
@@ -32,7 +32,7 @@ def import_chartqax(max_rows: int | None = None):
         with zipfile.ZipFile(zip_path, "r") as z:
             z.extractall(extract_path)
 
-    with aws.get_db_connection() as conn:
+    with rds.get_db_connection() as conn:
         with conn.cursor() as cursor:
             _import_dataset(ds, cursor, extract_path, zip_root, max_rows)
 
@@ -93,8 +93,8 @@ def _import_dataset(ds, cursor, extract_path, zip_root, max_rows: int | None) ->
             graph_type = _map_graph_type(graph_type)
 
             print(f'[SAMPLE {num_imported+1}] {graph_type} GRAPH ({len(image_bytes)} bytes): "{question}" "{answer}"')
-            image_key = aws.put_image(image_bytes)
-            aws.add_sample(cursor, "ChartQA-X", graph_type, question, answer, image_key)
+            image_key = s3.put_image(image_bytes)
+            rds.insert_sample(cursor, "ChartQA-X", graph_type, question, answer, image_key)
 
             num_imported += 1
             if max_rows is not None and num_imported >= max_rows:
@@ -143,9 +143,9 @@ def _image_to_bytes(image) -> bytes:
     return buffer.getvalue()
 
 
-def _map_graph_type(graph_type: str) -> GraphType:
+def _map_graph_type(graph_type: str) -> ChartType:
     mapping = {
-        "two_col": GraphType.BAR,
-        "multi_col": GraphType.BAR,
+        "two_col": ChartType.BAR,
+        "multi_col": ChartType.BAR,
     }
-    return mapping.get(graph_type, GraphType.OTHER)
+    return mapping.get(graph_type, ChartType.OTHER)
