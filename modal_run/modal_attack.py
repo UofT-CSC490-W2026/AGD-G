@@ -2,8 +2,22 @@
 Modal script to run the test attack. Not set up for AWS integration or production at all.
 """
 import modal
-from agdg.attack.attack import attack
-from modal_run.image import build_image
+try:
+    import sys
+    import os
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from agd.core.attack import attack
+except (ImportError, ModuleNotFoundError):
+    from core.attack import attack
+
+modal_image = (
+    modal.Image.debian_slim(python_version="3.11")
+    .uv_pip_install("torch", "transformers>=4.48", "pillow", "tqdm", "accelerate")
+    .add_local_file("xray-fish-profile.png", "/root/clean_image.png", copy=True)
+    .add_local_file("data_viz.png", "/root/data_viz.png", copy=True)
+    .add_local_file("target.jpg", "/root/target.jpg", copy=True)
+    .add_local_python_source("core", copy=False)
+)
 
 hf_volume = modal.Volume.from_name("huggingface-cache", create_if_missing=True)
 image_volume = modal.Volume.from_name("agd_images", create_if_missing=True)
@@ -24,12 +38,12 @@ def attack_test(
     epsilon: float = 0.0627,
     step_size: float = 0.0078,
     steps: int = 300,
-    repel_clean: float = 0.35,
+    repel_clean: float = 0.0,
     attacker: str = "targeted_text",
-    model: str = "clip_text_patch",
+    model: str = "llava15_text",
     clean_image_path: str = "/root/data_viz.png",
-    target_question: str = "What is the exact value for Category B?",
-    target_response: str = "42",
+    target_question: str = "Which country was the leading pharmaceutical supplier to Germany in 2019?",
+    target_response: str = "Ireland",
     source_response: str = "",
     repel_source_text: float = 0.5,
     eot_samples: int = 1,
@@ -47,6 +61,8 @@ def attack_test(
         alpha=step_size,
         steps=steps,
         repel_clean=repel_clean,
+        attacker=attacker,
+        model=model,
         clean_image_path=clean_image_path,
         target_question=target_question,
         target_response=target_response,

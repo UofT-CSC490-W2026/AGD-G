@@ -1,0 +1,6 @@
+            cgrad = grad * mask
+            cthr = torch.quantile(cgrad.flatten(1), 1.0 - max_area_ratio, dim=1).view(-1, 1, 1, 1)
+            mask = (cgrad >= cthr).float()
+            mask = F.max_pool2d(mask, kernel_size=3, stride=1, padding=1)
+
+        return mask.clamp(0, 1)

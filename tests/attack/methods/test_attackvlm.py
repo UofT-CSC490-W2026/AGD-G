@@ -89,6 +89,8 @@ def calculate_ssd(img1, img2):
 class MockImageTargetModel:
     def __init__(self):
         self.device = "cpu"
+    def get_image_size(self):
+        return (512, 512)
     def embed_image(self, x, detach=False):
         # Ensure x is differentiable if it requires grad
         # We need a path from x to the output
@@ -539,7 +541,7 @@ def test_21_text_loss_depends_on_adv_embed(clean_image_and_target):
     clean_image, target_text = clean_image_and_target
     model = MockTextTargetModel()
     attacker = AttackVLMText(model, device="cpu")
-    clean_t = attacker._load_image_tensor(clean_image)
+    clean_t = attacker._load_image_tensor(clean_image).unsqueeze(0)
     clean_embed = model.embed_image(clean_t)
     # Set repel_clean=0 to isolate the target text term (-sim_text only)
     attacker.setup(clean_t, target_text=target_text, repel_clean=0.0)
@@ -597,7 +599,7 @@ def test_23_source_text_loss_depends_on_adv_embed(clean_image_and_target):
     clean_image, target_text = clean_image_and_target
     model = MockTextTargetModel()
     attacker = AttackVLMText(model, device="cpu")
-    clean_t = attacker._load_image_tensor(clean_image)
+    clean_t = attacker._load_image_tensor(clean_image).unsqueeze(0)
     clean_embed = model.embed_image(clean_t)
     attacker.setup(
         clean_t,
