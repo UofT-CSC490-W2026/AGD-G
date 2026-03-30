@@ -32,17 +32,23 @@ variable "allowed_db_cidr_blocks" {
 variable "db_deletion_protection" {
   type        = bool
   description = "Prevent accidental RDS deletion."
-  default     = false
+  default     = true
 }
 
 variable "db_backup_retention_days" {
   type        = number
   description = "Days to retain automated RDS backups."
-  default     = 0
+  default     = 120
 }
 
 variable "s3_versioning" {
   type        = bool
   description = "Enable S3 object versioning for recovery."
-  default     = false
+  default     = true
+}
+
+variable "s3_deletion_protection" {
+  type        = bool
+  description = "Prevent accidental S3 deletion."
+  default     = true
 }

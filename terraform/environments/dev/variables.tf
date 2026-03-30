@@ -46,3 +46,9 @@ variable "s3_versioning" {
   description = "Enable S3 object versioning for recovery."
   default     = false
 }
+
+variable "s3_deletion_protection" {
+  type        = bool
+  description = "Prevent accidental S3 deletion."
+  default     = false
+}
