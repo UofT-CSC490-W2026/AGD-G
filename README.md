@@ -6,7 +6,6 @@ Group-1 Project
 <!-- coverage:project:start -->
 ![PROJECT coverage](https://img.shields.io/badge/coverage-91.51%25-brightgreen)
 
-
 Overall automated line coverage: `91.51%`
 <!-- coverage:project:end -->
 
