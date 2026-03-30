@@ -1,9 +1,9 @@
 import io
 import sys
+import types
+from unittest.mock import MagicMock
 
 from PIL import Image
-
-from .helpers import ensure_modal_root, import_fresh, install_fake_modal
 
 
 def make_png(mode="RGB", size=(32, 16), color=None):
@@ -13,84 +13,91 @@ def make_png(mode="RGB", size=(32, 16), color=None):
     return buffer.getvalue()
 
 
-def load_module():
-    ensure_modal_root()
-    install_fake_modal()
-    return import_fresh("agdg.data_pipeline.preprocess_charts")
+def _install_fake_boto(monkeypatch):
+    """Mock boto3/psycopg2/botocore so importing aws doesn't need real AWS."""
+    fake_boto3 = types.ModuleType("boto3")
+    fake_boto3.client = MagicMock()
+    fake_psycopg2 = types.ModuleType("psycopg2")
+    fake_psycopg2.connect = MagicMock()
+    fake_botocore = types.ModuleType("botocore")
+    fake_botocore_exc = types.ModuleType("botocore.exceptions")
+    fake_botocore_exc.ClientError = type("ClientError", (Exception,), {})
+    fake_botocore.exceptions = fake_botocore_exc
+
+    monkeypatch.setitem(sys.modules, "boto3", fake_boto3)
+    monkeypatch.setitem(sys.modules, "psycopg2", fake_psycopg2)
+    monkeypatch.setitem(sys.modules, "botocore", fake_botocore)
+    monkeypatch.setitem(sys.modules, "botocore.exceptions", fake_botocore_exc)
 
 
-def test_validate_image_accepts_png_and_rejects_garbage():
-    module = load_module()
+def _load_module(monkeypatch):
+    import importlib
+    _install_fake_boto(monkeypatch)
+    sys.modules.pop("agdg.data_pipeline.aws", None)
+    sys.modules.pop("agdg.data_pipeline.preprocess_charts", None)
+    return importlib.import_module("agdg.data_pipeline.preprocess_charts")
 
+
+# ---------------------------------------------------------------------------
+# Pure function tests (no aws interaction)
+# ---------------------------------------------------------------------------
+
+def test_validate_image_accepts_png_and_rejects_garbage(monkeypatch):
+    module = _load_module(monkeypatch)
     assert module.validate_image(make_png()) is True
     assert module.validate_image(b"not-an-image") is False
 
 
-def test_convert_to_rgb_flattens_alpha():
-    module = load_module()
+def test_convert_to_rgb_flattens_alpha(monkeypatch):
+    module = _load_module(monkeypatch)
     image = Image.new("RGBA", (10, 10), (0, 128, 255, 128))
-
     converted = module.convert_to_rgb(image)
-
     assert converted.mode == "RGB"
     assert converted.size == (10, 10)
 
 
-def test_convert_to_rgb_handles_palette_and_la_and_other_modes():
-    module = load_module()
-
-    palette = Image.new("P", (4, 4))
-    converted_palette = module.convert_to_rgb(palette)
-    converted_la = module.convert_to_rgb(Image.new("LA", (4, 4), (100, 128)))
-    converted_l = module.convert_to_rgb(Image.new("L", (4, 4), 50))
-
-    assert converted_palette.mode == "RGB"
-    assert converted_la.mode == "RGB"
-    assert converted_l.mode == "RGB"
+def test_convert_to_rgb_handles_palette_and_la_and_other_modes(monkeypatch):
+    module = _load_module(monkeypatch)
+    assert module.convert_to_rgb(Image.new("P", (4, 4))).mode == "RGB"
+    assert module.convert_to_rgb(Image.new("LA", (4, 4), (100, 128))).mode == "RGB"
+    assert module.convert_to_rgb(Image.new("L", (4, 4), 50)).mode == "RGB"
 
 
-def test_auto_crop_whitespace_returns_tighter_box():
-    module = load_module()
+def test_auto_crop_whitespace_returns_tighter_box(monkeypatch):
+    module = _load_module(monkeypatch)
     image = Image.new("RGB", (30, 30), (255, 255, 255))
     for x in range(10, 15):
         for y in range(12, 18):
             image.putpixel((x, y), (0, 0, 0))
 
     cropped, crop_box = module.auto_crop_whitespace(image)
-
     assert cropped.size[0] < image.size[0]
     assert cropped.size[1] < image.size[1]
     assert crop_box[0] <= 10
     assert crop_box[1] <= 12
 
 
-def test_auto_crop_whitespace_returns_original_for_blank_image():
-    module = load_module()
+def test_auto_crop_whitespace_returns_original_for_blank_image(monkeypatch):
+    module = _load_module(monkeypatch)
     image = Image.new("RGB", (20, 20), (255, 255, 255))
-
     cropped, crop_box = module.auto_crop_whitespace(image)
-
     assert cropped is image
     assert crop_box == [0, 0, 20, 20]
 
 
-def test_letterbox_resize_outputs_target_square():
-    module = load_module()
+def test_letterbox_resize_outputs_target_square(monkeypatch):
+    module = _load_module(monkeypatch)
     image = Image.new("RGB", (200, 100), (255, 255, 255))
-
     resized, meta = module.letterbox_resize(image, target_size=128)
-
     assert resized.size == (128, 128)
     assert meta["resized_w"] == 128
     assert meta["resized_h"] == 64
     assert meta["offset_y"] == 32
 
 
-def test_preprocess_single_returns_png_and_metadata():
-    module = load_module()
-
+def test_preprocess_single_returns_png_and_metadata(monkeypatch):
+    module = _load_module(monkeypatch)
     result = module.preprocess_single(make_png(size=(60, 20)))
-
     assert result is not None
     assert result["original_width"] == 60
     assert result["original_height"] == 20
@@ -99,13 +106,16 @@ def test_preprocess_single_returns_png_and_metadata():
     assert processed.size == (module.TARGET_SIZE, module.TARGET_SIZE)
 
 
-def test_preprocess_single_returns_none_for_invalid_image():
-    module = load_module()
-
+def test_preprocess_single_returns_none_for_invalid_image(monkeypatch):
+    module = _load_module(monkeypatch)
     assert module.preprocess_single(b"not-an-image") is None
 
 
-def build_fake_aws(raw_uuids, updates, *, missing_keys=None, preprocess_result=None):
+# ---------------------------------------------------------------------------
+# preprocess_all tests (mock aws)
+# ---------------------------------------------------------------------------
+
+def _build_fake_aws(raw_uuids, updates, *, missing_keys=None):
     missing_keys = missing_keys or set()
 
     class FakeCursor:
@@ -151,7 +161,8 @@ def build_fake_aws(raw_uuids, updates, *, missing_keys=None, preprocess_result=N
             return conn
 
     factory = FakeConnectionFactory()
-    fake_aws = type("FakeAws", (), {})()
+
+    fake_aws = types.ModuleType("agdg.data_pipeline.aws")
     fake_aws.get_db_connection = factory
 
     def get_image(key):
@@ -165,11 +176,10 @@ def build_fake_aws(raw_uuids, updates, *, missing_keys=None, preprocess_result=N
 
 
 def test_preprocess_all_updates_rows_with_processed_images(monkeypatch):
-    module = load_module()
+    module = _load_module(monkeypatch)
     updates = []
-    fake_aws, _ = build_fake_aws(["raw-1"], updates)
-
-    monkeypatch.setitem(sys.modules, "aws", fake_aws)
+    fake_aws, _ = _build_fake_aws(["raw-1"], updates)
+    monkeypatch.setattr(module, "aws", fake_aws)
     monkeypatch.setattr(
         module,
         "preprocess_single",
@@ -189,10 +199,10 @@ def test_preprocess_all_updates_rows_with_processed_images(monkeypatch):
 
 
 def test_preprocess_all_returns_zero_when_nothing_to_process(monkeypatch):
-    module = load_module()
+    module = _load_module(monkeypatch)
     updates = []
-    fake_aws, _ = build_fake_aws([], updates)
-    monkeypatch.setitem(sys.modules, "aws", fake_aws)
+    fake_aws, _ = _build_fake_aws([], updates)
+    monkeypatch.setattr(module, "aws", fake_aws)
 
     result = module.preprocess_all()
 
@@ -201,15 +211,11 @@ def test_preprocess_all_returns_zero_when_nothing_to_process(monkeypatch):
 
 
 def test_preprocess_all_skips_missing_and_corrupt_images(monkeypatch):
-    module = load_module()
+    module = _load_module(monkeypatch)
     updates = []
-    fake_aws, _ = build_fake_aws(["missing", "corrupt"], updates, missing_keys={"missing"})
-    monkeypatch.setitem(sys.modules, "aws", fake_aws)
-    monkeypatch.setattr(
-        module,
-        "preprocess_single",
-        lambda img_bytes: None,
-    )
+    fake_aws, _ = _build_fake_aws(["missing", "corrupt"], updates, missing_keys={"missing"})
+    monkeypatch.setattr(module, "aws", fake_aws)
+    monkeypatch.setattr(module, "preprocess_single", lambda img_bytes: None)
 
     result = module.preprocess_all()
 
@@ -218,11 +224,11 @@ def test_preprocess_all_skips_missing_and_corrupt_images(monkeypatch):
 
 
 def test_preprocess_all_commits_batch_updates(monkeypatch):
-    module = load_module()
+    module = _load_module(monkeypatch)
     module.BATCH_SIZE = 1
     updates = []
-    fake_aws, factory = build_fake_aws(["raw-1"], updates)
-    monkeypatch.setitem(sys.modules, "aws", fake_aws)
+    fake_aws, factory = _build_fake_aws(["raw-1"], updates)
+    monkeypatch.setattr(module, "aws", fake_aws)
     monkeypatch.setattr(
         module,
         "preprocess_single",
@@ -238,14 +244,3 @@ def test_preprocess_all_commits_batch_updates(monkeypatch):
 
     assert result["unique_images"] == 1
     assert factory.connections[1].commits == 1
-
-
-def test_preprocess_main_prints_remote_result(capsys):
-    module = load_module()
-    module.preprocess_all.remote = lambda: {"unique_images": 2, "rows_updated": 3, "skipped": 1}
-
-    module.main()
-
-    out = capsys.readouterr().out
-    assert "unique_images" in out
-    assert "rows_updated" in out

@@ -4,7 +4,7 @@ import boto3
 from botocore.exceptions import ClientError
 import psycopg2
 from contextlib import contextmanager
-from agdg.data_pipeline.config import (
+from agdg.data_pipeline.schema import (
     GraphType,
 	BUCKET,
 	IMAGE_PREFIX,

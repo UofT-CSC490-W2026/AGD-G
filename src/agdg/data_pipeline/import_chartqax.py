@@ -1,49 +1,23 @@
 """
 ChartQAx data pipeline: loads ChartQA-X from Hugging Face, processes chart images
-and QA pairs, and (TODO) writes metadata to RDS and images to S3.
+and QA pairs, and writes metadata to RDS and images to S3.
 """
+from agdg.data_pipeline import aws
+from agdg.data_pipeline.schema import GraphType
 
-# python import is executed before modal ships the code
-# the local file config is in the parent directory thus missing
-import modal
-from agdg.data_pipeline.config import GraphType
 
-data_pipeline_image = (
-    modal.Image.debian_slim(python_version="3.13.5")
-    .add_local_dir(".", "/root")
-    .pip_install(".")
-    .add_local_python_source("modal_run", copy=False)
-)
-
-app = modal.App(
-        "data-pipeline",
-        image=data_pipeline_image,
-        secrets=[
-            modal.Secret.from_name("aws"),
-            modal.Secret.from_name("huggingface"),
-        ],
-    )
-
-@app.function(
-    timeout=3600,
-    memory=4096,
-)
-def main(max_rows : int | None = None):
+def import_chartqax(max_rows: int | None = None):
     """Load ChartQA-X dataset, extract chart images and QA pairs, and process each row."""
     from datasets import load_dataset
     from huggingface_hub import hf_hub_download
     import zipfile
-    import aws
     import os
 
     aws.create_table_if_not_exists()
 
-    # Load ChartQA-X dataset metadata (splits and row references)
     repo_id = "shamanthakhegde/ChartQA-X"
     ds = load_dataset(repo_id)
 
-    # Optional zip-based image bundle fallback.
-    # If dataset rows already include an "image" field, this is not needed.
     zip_filename = os.environ.get("HF_IMAGE_ZIP", "")
     zip_root = os.environ.get("HF_IMAGE_ROOT", "ChartQA-X")
     extract_path = "/tmp/chartqa_x"
@@ -60,11 +34,11 @@ def main(max_rows : int | None = None):
 
     with aws.get_db_connection() as conn:
         with conn.cursor() as cursor:
-            import_dataset(ds, cursor, extract_path, zip_root, max_rows)
+            _import_dataset(ds, cursor, extract_path, zip_root, max_rows)
 
-def import_dataset(ds, cursor, extract_path, zip_root, max_rows : int | None) -> None:
+
+def _import_dataset(ds, cursor, extract_path, zip_root, max_rows: int | None) -> None:
     import re
-    import aws
 
     num_imported = 0
     for split_name, split in ds.items():
@@ -109,14 +83,14 @@ def import_dataset(ds, cursor, extract_path, zip_root, max_rows : int | None) ->
                 printed_schema_preview = True
 
             try:
-                image = get_image(row, extract_path, zip_root)
+                image = _get_image(row, extract_path, zip_root)
             except ValueError as e:
                 print(f"Skipping row: {str(e)}")
                 continue
             image = image.convert("RGB")
-            image_bytes = image_to_bytes(image)
+            image_bytes = _image_to_bytes(image)
             graph_type = re.sub(r'_[0-9]+', '', graph_type)
-            graph_type = map_graph_type(graph_type)
+            graph_type = _map_graph_type(graph_type)
 
             print(f'[SAMPLE {num_imported+1}] {graph_type} GRAPH ({len(image_bytes)} bytes): "{question}" "{answer}"')
             image_key = aws.put_image(image_bytes)
@@ -126,14 +100,14 @@ def import_dataset(ds, cursor, extract_path, zip_root, max_rows : int | None) ->
             if max_rows is not None and num_imported >= max_rows:
                 return
 
-def get_image(row, extract_path, zip_root) -> bytes:
+
+def _get_image(row, extract_path, zip_root):
     from PIL import Image
     from io import BytesIO
     import os
-    # Preferred: direct image column from HF dataset.
+
     image = row.get("image") or row.get("image_path")
     if isinstance(image, dict):
-        # datasets Image feature may provide {"bytes": ..., "path": ...}
         if image.get("bytes"):
             return Image.open(BytesIO(image["bytes"]))
         elif image.get("path"):
@@ -161,23 +135,17 @@ def get_image(row, extract_path, zip_root) -> bytes:
         raise ValueError(f"Row missing image: {image_path}")
     return Image.open(final_image_path)
 
-def image_to_bytes(image) -> bytes:
+
+def _image_to_bytes(image) -> bytes:
     from io import BytesIO
     buffer = BytesIO()
     image.save(buffer, format="PNG")
     return buffer.getvalue()
 
-def map_graph_type(graph_type: str) -> GraphType:
+
+def _map_graph_type(graph_type: str) -> GraphType:
     mapping = {
         "two_col": GraphType.BAR,
         "multi_col": GraphType.BAR,
     }
     return mapping.get(graph_type, GraphType.OTHER)
-
-@app.local_entrypoint()
-def local_entrypoint(*arglist):
-    import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument("-l", "--limit", type=int, default=None, help="Maximum number of samples to import")
-    args = parser.parse_args(args=arglist)
-    main.remote(max_rows=args.limit)

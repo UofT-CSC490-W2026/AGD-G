@@ -1,10 +1,10 @@
+import importlib
 import sys
 import types
 from uuid import UUID
 
 import pytest
 
-from .helpers import ensure_modal_root, import_fresh
 
 class FakeClientError(Exception):
     def __init__(self, code):
@@ -43,8 +43,6 @@ class FakeConnection:
 
 
 def load_aws(monkeypatch, *, s3_client=None, rds_client=None, connection=None):
-    ensure_modal_root()
-
     fake_boto3 = types.ModuleType("boto3")
     fake_psycopg2 = types.ModuleType("psycopg2")
     fake_botocore = types.ModuleType("botocore")
@@ -63,7 +61,10 @@ def load_aws(monkeypatch, *, s3_client=None, rds_client=None, connection=None):
     monkeypatch.setitem(sys.modules, "psycopg2", fake_psycopg2)
     monkeypatch.setitem(sys.modules, "botocore", fake_botocore)
     monkeypatch.setitem(sys.modules, "botocore.exceptions", fake_botocore_exceptions)
-    return import_fresh("agdg.data_pipeline.aws")
+
+    importlib.invalidate_caches()
+    sys.modules.pop("agdg.data_pipeline.aws", None)
+    return importlib.import_module("agdg.data_pipeline.aws")
 
 
 def test_get_db_connection_commits_and_closes(monkeypatch):

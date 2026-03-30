@@ -3,36 +3,17 @@ TODO: Replace stub with actual VLM inference.
 Currently compares good_answer with a placeholder output and
 randomly assigns attack_succeeded.
 """
-import sys
-from pathlib import Path
-import modal
+import logging
 
 from agdg.data_pipeline.aws import get_db_connection, get_image
-
-app = modal.App("agd-evaluate")
-
-image = (
-    modal.Image.debian_slim(python_version="3.11")
-    .add_local_dir(".", "/root")
-    .pip_install(".")
-    .add_local_python_source("modal_run", copy=False)
-)
 
 BATCH_SIZE = 100
 
 
-@app.function(
-    image=image,
-    secrets=[modal.Secret.from_name("aws"), modal.Secret.from_name("aws-rds")],
-    timeout=3600, memory=4096,
-)
 def evaluate_all(max_rows: int = 0):
-    import logging
-
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     log = logging.getLogger("evaluate")
 
-    # Get rows with adversarial images that haven't been evaluated
     with get_db_connection() as conn:
         with conn.cursor() as cur:
             limit = f"LIMIT {max_rows}" if max_rows > 0 else ""
@@ -58,14 +39,11 @@ def evaluate_all(max_rows: int = 0):
     with get_db_connection() as conn:
         with conn.cursor() as cur:
             for sid, adv_uuid, question, good_answer in rows:
-                # Download adversarial image
                 adv_bytes = get_image(adv_uuid)
 
                 # TODO: Send adversarial image + question to target VQA model
-                # and capture its response.
                 output_answer = good_answer
 
-                # Compare
                 attack_succeeded = output_answer.strip().lower() != good_answer.strip().lower()
 
                 cur.execute(
@@ -93,10 +71,3 @@ def evaluate_all(max_rows: int = 0):
     log.info(f"Attack Success Rate: {asr:.1f}%")
 
     return {"evaluated": evaluated, "succeeded": succeeded, "failed": failed, "asr_pct": round(asr, 1)}
-
-
-@app.local_entrypoint()
-def main(l: int = 0):
-    r = evaluate_all.remote(max_rows=l)
-    for k, v in r.items():
-        print(f"  {k}: {v}")

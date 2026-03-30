@@ -1,23 +1,9 @@
-# python import is executed before modal ships the code
-# the local file config is in the parent directory thus missing
-import modal
 from typing import Optional
 import json
 import logging
 
-import agdg.data_pipeline.aws
+from agdg.data_pipeline import aws
 
-# Modal setup
-app = modal.App("agd-preprocess-charts")
-
-image = (
-    modal.Image.debian_slim(python_version="3.11")
-    .add_local_dir(".", "/root")
-    .pip_install(".")
-    .add_local_python_source("modal_run", copy=False)
-)
-
-# Configuration
 TARGET_SIZE = 512
 PAD_COLOR = (255, 255, 255)
 WHITESPACE_CROP_THRESHOLD = 245
@@ -25,8 +11,6 @@ WHITESPACE_CROP_MIN_BORDER = 5
 BATCH_SIZE = 100
 
 
-
-# Preprocessing functions
 def validate_image(img_bytes: bytes) -> bool:
     from PIL import Image
     import io
@@ -131,23 +115,10 @@ def preprocess_single(img_bytes: bytes) -> Optional[dict]:
     }
 
 
-# ---------------------------------------------------------------------------
-# Core processing logic
-# ---------------------------------------------------------------------------
-
-@app.function(
-    image=image,
-    secrets=[
-        modal.Secret.from_name("aws"),
-    ],
-    timeout=7200,
-    memory=4096,
-)
 def preprocess_all():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     log = logging.getLogger("preprocess_charts")
 
-    # Get unique raw images needing processing (any dataset)
     with aws.get_db_connection() as conn:
         with conn.cursor() as cur:
             cur.execute("""
@@ -163,7 +134,6 @@ def preprocess_all():
         log.info("Nothing to process")
         return {"unique_images": 0, "rows_updated": 0, "skipped": 0}
 
-    # Process each unique image
     processed_count = 0
     skipped_count = 0
     rows_updated = 0
@@ -171,7 +141,6 @@ def preprocess_all():
     with aws.get_db_connection() as conn:
         with conn.cursor() as cur:
             for raw_uuid in raw_uuids:
-                # Download via get_image
                 try:
                     raw_bytes = aws.get_image(raw_uuid)
                 except KeyError:
@@ -179,17 +148,14 @@ def preprocess_all():
                     skipped_count += 1
                     continue
 
-                # Preprocess
                 result = preprocess_single(raw_bytes)
                 if result is None:
                     log.warning(f"  Corrupt image: {raw_uuid}")
                     skipped_count += 1
                     continue
 
-                # Upload processed image → new UUID
                 processed_uuid = aws.put_image(result["image_bytes"])
 
-                # Update all rows sharing this raw_graph
                 meta_json = json.dumps(result["meta"])
                 original_width = result["original_width"]
                 original_height = result["original_height"]
@@ -219,10 +185,3 @@ def preprocess_all():
         "rows_updated": rows_updated,
         "skipped": skipped_count,
     }
-
-# Entrypoint
-@app.local_entrypoint()
-def main():
-    result = preprocess_all.remote()
-    for k, v in result.items():
-        print(f"  {k:20s}: {v}")

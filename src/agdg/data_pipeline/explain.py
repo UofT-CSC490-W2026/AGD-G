@@ -3,34 +3,17 @@ For a target VLM, find its intrinsic accuracy in explaining charts.
 TODO: Replace stub with actual VLM API calls.
 Currently writes a placeholder string to hidden_answer.
 """
-import modal
+import logging
 
 from agdg.data_pipeline.aws import get_db_connection, get_image
-
-app = modal.App("agd-explain-charts")
-
-image = (
-    modal.Image.debian_slim(python_version="3.11")
-    .add_local_dir(".", "/root")
-    .pip_install(".")
-    .add_local_python_source("modal_run", copy=False)
-)
 
 BATCH_SIZE = 100
 
 
-@app.function(
-    image=image,
-    secrets=[modal.Secret.from_name("aws"), modal.Secret.from_name("aws-rds")],
-    timeout=3600, memory=4096,
-)
 def explain_all(max_rows: int = 0):
-    import logging
-
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     log = logging.getLogger("explain")
 
-    # Get rows that have been preprocessed but not yet explained
     with get_db_connection() as conn:
         with conn.cursor() as cur:
             limit = f"LIMIT {max_rows}" if max_rows > 0 else ""
@@ -54,11 +37,9 @@ def explain_all(max_rows: int = 0):
     with get_db_connection() as conn:
         with conn.cursor() as cur:
             for sid, good_uuid, question in rows:
-                # Download preprocessed image
                 img_bytes = get_image(good_uuid)
 
                 # TODO: Send image + question to VLM API (e.g. GPT-4V, Claude)
-                # and get a natural language description of the chart.
                 description = f"[PLACEHOLDER] Description of chart {good_uuid} for: {question}"
 
                 cur.execute(
@@ -73,10 +54,3 @@ def explain_all(max_rows: int = 0):
 
     log.info(f"Done: {explained} samples explained")
     return {"explained": explained}
-
-
-@app.local_entrypoint()
-def main(l: int = 0):
-    r = explain_all.remote(max_rows=l)
-    for k, v in r.items():
-        print(f"  {k}: {v}")
