@@ -1,5 +1,6 @@
 """
-Reusable AttackVLM entry point for single-image attacks.
+Factory functions for building attack methods and surrogate models, plus a
+single-image attack runner used by the Modal entrypoint.
 """
 
 from __future__ import annotations
@@ -63,6 +64,7 @@ def _ensure_dependencies_loaded() -> None:
 
 
 def build_target_model(model: str, device: str | None = None):
+    """Instantiate a surrogate embedding model by name (e.g. ``"clip_text"``, ``"llava"``)."""
     _ensure_dependencies_loaded()
     resolved_device = _get_device(device)
     model_classes = {
@@ -83,6 +85,7 @@ def build_target_model(model: str, device: str | None = None):
 
 
 def build_attack_method(attacker: str, model: str, device: str | None = None):
+    """Build an attack method (e.g. ``"targeted_text"``) paired with a surrogate model."""
     _ensure_dependencies_loaded()
     attack_classes = {
         "untargeted": AttackVLMUntargeted,
@@ -112,7 +115,7 @@ def generate_adversarial_image(
     repel_clean: float = 0.35,
     attacker: str = "targeted_text",
     model: str = "clip_text_patch",
-    clean_image_path: str = "/root/data_viz.png",
+    clean_image_path: str = "/root/data_viz.png",  # default path inside Modal container
     target_question: str = "What is the exact value for Category B?",
     target_response: str = "42",
     source_response: str = "",
@@ -128,6 +131,7 @@ def generate_adversarial_image(
     profile: str = "simple",
     device: str | None = None,
 ):
+    """Run a single-image adversarial attack and return the perturbed PIL image(s)."""
     attack_method = build_attack_method(attacker=attacker, model=model, device=device)
     clean_image = Image.open(clean_image_path)
     hyperparameters = {

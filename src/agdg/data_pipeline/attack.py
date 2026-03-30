@@ -24,6 +24,7 @@ def attack_all(
     steps: int = 300,
     target_strategy: str | None = None,
 ):
+    """Generate adversarial charts for all target answers that lack one for *method*/*surrogate*."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     log = logging.getLogger("attack")
 

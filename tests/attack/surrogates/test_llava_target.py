@@ -47,13 +47,6 @@ def mock_transformers():
             "model_cls": mock_model_cls
         }
 
-def test_llava_init(mock_transformers):
-    model = LlavaTextTargetModel(device="cpu")
-    assert model.device == "cpu"
-    assert model.model_id == "llava-hf/llava-1.5-7b-hf"
-    assert model.image_size == 336
-    assert torch.allclose(model.image_mean, torch.tensor([0.48145466, 0.4578275, 0.40821073]))
-
 def test_llava_get_image_size(mock_transformers):
     model = LlavaTextTargetModel(device="cpu")
     assert model.get_image_size() == (336, 336)

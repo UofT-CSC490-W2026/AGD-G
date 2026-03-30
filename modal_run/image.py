@@ -1,3 +1,5 @@
+"""Modal container image builders for GPU and data-pipeline jobs."""
+
 import modal
 
 

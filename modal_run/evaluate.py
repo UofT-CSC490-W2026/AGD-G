@@ -44,7 +44,7 @@ def main(
     elif mode == "clean":
         r = generate_clean.remote(max_rows=limit, model_id=model)
     else:
-        raise ValueError(f"Unknown mode: {mode!r} (expected 'evaluate', 'clean', or 'target')")
+        raise ValueError(f"Unknown mode: {mode!r} (expected 'evaluate' or 'clean')")
     
     for k, v in r.items():
         print(f"  {k}: {v}")

@@ -128,6 +128,7 @@ def generate_image_response(
 
 
 def generate_clean_responses(max_rows: int = 0, model_id: str = DEFAULT_MODEL_ID):
+    """Caption every preprocessed chart that lacks a clean answer for *model_id*."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     log = logging.getLogger("clean_response")
 

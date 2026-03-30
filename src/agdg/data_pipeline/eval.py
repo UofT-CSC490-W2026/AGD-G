@@ -40,6 +40,7 @@ def evaluate_all(
     max_rows: int = 0,
     target_strategy: str | None = None,
 ):
+    """Query a VLM on each unevaluated adversarial chart and record whether the attack succeeded."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     log = logging.getLogger("evaluate")
 

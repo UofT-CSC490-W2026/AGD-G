@@ -1,7 +1,6 @@
 <img width="360" height="93" alt="AGD-G logo rendered in white monospace text on black background, depicting the letters AGD dot G in an artistic gradient in the foreground, with a subtle line chart in the background" src="https://github.com/user-attachments/assets/1d8ea8e5-0f1e-4bdb-b042-493b8bc8f6de" />
 
 # AGD-G
-Group-1 Project
 
 <!-- coverage:project:start -->
 ![PROJECT coverage](https://img.shields.io/badge/coverage-92.76%25-brightgreen)
@@ -9,17 +8,70 @@ Group-1 Project
 Overall automated line coverage: `92.76%`
 <!-- coverage:project:end -->
 
-## Terraform usage
+AGD-G is an adversarial attack pipeline targeting chart-based visual question answering (chart QA).
+It ingests chart datasets (ChartBench, ChartX, ChartQA-X), preprocesses images, generates
+clean VLM captions, produces target captions via a pluggable targeting strategy, runs adversarial
+attacks (AttackVLM variants with CLIP and LLaVA surrogates), and evaluates attack success via
+sentence-similarity scoring. All GPU-intensive stages run on [Modal](https://modal.com) with
+data persisted in AWS S3 (images) and RDS PostgreSQL (metadata and captions).
 
-1. Install Terraform
-2. Install AWS CLI
-3. `aws configure`
-    - Enter AWS credentials
-    - Enter `ca-central-1` as region
-4. `cd terraform/environments/dev`
-5. `terraform init`
+## Pipeline stages
 
-Then to update infrastructure:
+Each stage is idempotent -- it skips rows that already have results, so re-running is safe.
+
+1. **Ingest** -- Import chart datasets from HuggingFace, upload raw images to S3, and insert
+   `samples` rows.
+   `modal run modal_run/ingest.py`
+
+2. **Preprocess** -- Validate, crop whitespace, letterbox-resize to 512x512, and upload cleaned
+   PNGs.
+   `modal run modal_run/ingest.py -- --preprocess-only`
+
+3. **Clean caption** -- Run a VLM (default: LLaVA 1.5-7B) on each preprocessed chart to generate
+   a baseline caption stored in `clean_answers`.
+   `modal run modal_run/evaluate.py -- --mode clean`
+
+4. **Target caption** -- A targeting strategy (currently Qwen2.5-VL-7B) takes the chart image and
+   clean caption, then produces a new caption that preserves chart type but changes the subject.
+   `modal run modal_run/target.py -- --strategy qwen`
+
+5. **Attack** -- Apply an adversarial perturbation (AttackVLM text/image/OCR variants) so the
+   chart image looks unchanged to humans but a VLM reads it as the target caption.
+   `modal run modal_run/attack.py`
+
+6. **Evaluate** -- Query the VLM on each adversarial chart and compare its answer to the clean
+   and target captions using sentence-transformer cosine similarity. An attack succeeds when the
+   answer is closer to the target.
+   `modal run modal_run/evaluate.py -- --mode evaluate`
+
+## Project structure
+
+```
+src/agdg/
+  data_pipeline/       Orchestration for each pipeline stage (ingest, preprocess,
+                       clean caption, target caption, attack, evaluate)
+    aws/               RDS helpers, S3 helpers, schema.sql
+  attack/              Adversarial attack methods and surrogate models
+    methods/           AttackVLM variants (text, image, OCR, untargeted)
+    surrogates/        CLIP and LLaVA embedding models used as surrogates
+  targeting/           Pluggable targeting strategies (Qwen, extensible)
+  scoring/             Sentence-similarity evaluation helpers
+
+modal_run/             Modal app entrypoints for each pipeline stage
+tests/                 Pytest suite mirroring src/agdg/ and modal_run/
+terraform/             AWS infrastructure (S3, RDS, IAM, security groups)
+docs/                  Background on adversarial-guided diffusion (AGD)
+```
+
+## Setup
+
+### Terraform (AWS infrastructure)
+
+1. Install Terraform and the AWS CLI
+2. `aws configure` -- enter credentials and set region to `ca-central-1`
+3. `cd terraform/environments/dev && terraform init`
+
+To apply changes:
 ```
 terraform apply \
     -var=db_password='<a secure password>' \
@@ -27,14 +79,13 @@ terraform apply \
     -var=allowed_db_cidr_blocks='["138.51.0.0/16"]'
 ```
 
-Production environment (`terraform/environments/prod`) is current unused
+The production environment (`terraform/environments/prod`) is currently unused.
 
-## Modal setup
+### Modal (GPU compute)
 
-1. Create a Modal account, create a workspace, or join someone else's
-2. Install Modal CLI
-3. `modal setup`
-4. Create secrets to grant Modal access to AWS and HuggingFace:
+1. Create or join a [Modal](https://modal.com) workspace
+2. Install the Modal CLI and run `modal setup`
+3. Create the required secrets:
 ```
 modal secret create aws \
   AWS_ACCESS_KEY_ID=... \
@@ -48,85 +99,12 @@ modal secret create huggingface \
   HF_TOKEN=...
 ```
 
-## Modal usage
+Run any pipeline stage with `modal run <entrypoint>`. All `@app.function()` work executes on
+Modal GPUs; CLI output streams to your terminal. `Ctrl-C` stops the remote job.
 
-**In Python**
+### Command-line access to RDS
 
-Import Modal and any AWS utility functions you need:
-```
-import modal
-from aws import get_db_connection, get_image, put_image
-```
-
-Define an image by chaining methods, using
-
-- `.uv_pip_install(["package1", "package2", ...])` to make packages available
-  (don't forget to also import them at the top of the file)
-- `.add_local_file("local_path", "remote_path")`
-  or `.add_local_dir("local_path", "remote_path")`
-  to upload needed files, including Python modules, to the image
-
-```
-aws_image = (
-        modal.Image.debian_slim()
-        .uv_pip_install(["boto3", "psycopg2-binary"])
-        .add_local_file("aws.py", "/root/aws.py")
-    )
-```
-
-Define an app, using
-
-- `image=` to the image you created above
-- `secrets=[modal.Secret.from_name("secret-name")]` to make secrets available
-  as environment variables (note that you need to include `"aws"` for S3 access
-  and both `"aws"` and `"aws-rds"` for RDS access)
-
-```
-app = modal.App(
-        "app-name",
-        image=aws_image,
-        secrets=[
-            modal.Secret.from_name("aws"),
-            modal.Secret.from_name("aws-rds"),
-        ],
-    )
-```
-
-Decorate any top-level function that needs to run on Modal servers with `@app.function()`.
-You do *not* need to do this for functions that that function calls.
-Call such a function with `name.remote`.
-
-```
-def bar(y):
-    return 2 * y
-
-@app.function()
-def foo(x):
-    for i in range(10000):
-        print(bar(x + i))
-
-def main():
-    print(bar(80))
-    foo.remote()
-```
-
-Define the entrypoint by prefixing it with `@app.local_entrypoint()`:
-
-```
-@app.local_entrypoint()
-def main():
-    foo.remote()
-```
-
-**In the shell**
-
-Now, just run your app with `modal run do_stuff.py`. Execution will start at the entrypoint.
-All `@app.function()` functions will be run on Modal servers and all CLI output will appear
-in your terminal. If you cancel the process with `Control-C`, it will stop on the Modal server too.
-
-## Command-line access to RDS
-
-Install `postgresql`, replace `...` with the database password, and access the database locally:
+Install `postgresql` and connect directly:
 ```
 PGPASSWORD='...' psql -h agd-dev-postgres.cdsyi46ammw7.ca-central-1.rds.amazonaws.com -U postgres -d postgres -p 5432
 ```

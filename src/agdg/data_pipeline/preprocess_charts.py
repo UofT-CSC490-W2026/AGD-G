@@ -1,3 +1,5 @@
+"""Crop, letterbox-resize, and upload preprocessed chart images to S3."""
+
 from typing import Optional
 import json
 import logging
@@ -116,6 +118,7 @@ def preprocess_single(img_bytes: bytes) -> Optional[dict]:
 
 
 def preprocess_all():
+    """Preprocess all raw charts that lack a clean_chart and upload results to S3."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     log = logging.getLogger("preprocess_charts")
 
