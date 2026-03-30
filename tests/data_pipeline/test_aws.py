@@ -355,6 +355,60 @@ def test_iter_target_inputs_yields_expected_payload(monkeypatch):
     assert conn.cursor_obj.executed[0][1] == ("smoke",)
 
 
+def test_iter_target_inputs_with_source(monkeypatch):
+    aws = load_aws(monkeypatch, s3_client=object(), connection=FakeConnection())
+    conn = BatchConnection([[(4, "clean answer", "clean-uuid")], []])
+
+    rows = list(aws.rds.iter_target_inputs(conn, "smoke", source="ChartBench", batch_size=5))
+
+    assert rows == [
+        {
+            "clean_answer_id": 4,
+            "clean_answer": "clean answer",
+            "clean_chart": "clean-uuid",
+        }
+    ]
+    assert conn.cursor_obj.executed[0][1] == ("smoke", "ChartBench")
+
+
+def test_iter_target_inputs_sampled(monkeypatch):
+    aws = load_aws(monkeypatch, s3_client=object(), connection=FakeConnection())
+
+    class SampledCursor:
+        def __init__(self):
+            self.executed = []
+
+        def execute(self, query, params=None):
+            self.executed.append((query, params))
+
+        def fetchall(self):
+            return [
+                (1, "answer1", "chart-uuid1", "ChartBench"),
+                (2, "answer2", "chart-uuid2", "ChartX"),
+            ]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    class SampledConn:
+        def __init__(self):
+            self.cursor_obj = SampledCursor()
+
+        def cursor(self):
+            return self.cursor_obj
+
+    conn = SampledConn()
+    rows = list(aws.rds.iter_target_inputs_sampled(conn, "qwen", per_source=5))
+
+    assert len(rows) == 2
+    assert rows[0]["chart_source"] == "ChartBench"
+    assert rows[1]["clean_answer"] == "answer2"
+    assert "UNION ALL" in conn.cursor_obj.executed[0][0]
+
+
 def test_iter_attack_inputs_yields_expected_payload(monkeypatch):
     aws = load_aws(monkeypatch, s3_client=object(), connection=FakeConnection())
     conn = BatchConnection([[(9, "clean answer", "clean-uuid", "target answer")], []])

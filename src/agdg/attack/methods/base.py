@@ -22,7 +22,7 @@ class UntargetedAttackMethod:
     Abstract base class for a method that guides an image's semantics away
     from its original state.
     """
-    def __init__(self, model: ImageTargetModel) -> None:
+    def __init__(self, model: ImageTargetModel) -> None:  # pragma: no cover
         self.model = model
 
     @abstractmethod
@@ -37,14 +37,14 @@ class UntargetedAttackMethod:
         Use the given attack strength, which will map to some hyperparameter inside the method.
         Other hyperparameters can be method-specific.
         """
-        pass
+        pass  # pragma: no cover
 
 
 class TextAttackMethod:
     """
     Abstract base class for a method that guides an image's caption towards target text.
     """
-    def __init__(self, model: TextTargetModel) -> None:
+    def __init__(self, model: TextTargetModel) -> None:  # pragma: no cover
         self.model = model
 
     @abstractmethod
@@ -61,7 +61,7 @@ class TextAttackMethod:
         Use the given attack strength, which will map to some hyperparameter inside the method.
         Other hyperparameters can be method-specific.
         """
-        pass
+        pass  # pragma: no cover
 
 
 class ImageAttackMethod:
@@ -69,7 +69,7 @@ class ImageAttackMethod:
     Abstract base class for a method that guides an image's caption towards a
     target image.
     """
-    def __init__(self, model: ImageTargetModel) -> None:
+    def __init__(self, model: ImageTargetModel) -> None:  # pragma: no cover
         self.model = model
 
     @abstractmethod
@@ -86,4 +86,4 @@ class ImageAttackMethod:
         Use the given attack strength, which will map to some hyperparameter inside the method.
         Other hyperparameters can be method-specific
         """
-        pass
+        pass  # pragma: no cover

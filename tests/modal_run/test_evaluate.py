@@ -89,3 +89,29 @@ def test_main_rejects_unknown_mode(monkeypatch):
 
     with pytest.raises(ValueError, match="Unknown mode"):
         module.main(mode="bogus", limit=0)
+
+
+def test_evaluate_body_calls_evaluate_all(monkeypatch):
+    module = _load(monkeypatch)
+
+    fake_eval = types.ModuleType("agdg.data_pipeline.eval")
+    fake_eval.evaluate_all = MagicMock(return_value={"evaluated": 5})
+    monkeypatch.setitem(sys.modules, "agdg.data_pipeline.eval", fake_eval)
+
+    result = module.evaluate(max_rows=10, strategy="qwen")
+
+    fake_eval.evaluate_all.assert_called_once_with(max_rows=10, target_strategy="qwen")
+    assert result == {"evaluated": 5}
+
+
+def test_generate_clean_body_calls_generate_clean_responses(monkeypatch):
+    module = _load(monkeypatch)
+
+    fake_clean = types.ModuleType("agdg.data_pipeline.clean_response")
+    fake_clean.generate_clean_responses = MagicMock(return_value={"processed": 3})
+    monkeypatch.setitem(sys.modules, "agdg.data_pipeline.clean_response", fake_clean)
+
+    result = module.generate_clean(max_rows=5, model_id="test-model")
+
+    fake_clean.generate_clean_responses.assert_called_once_with(max_rows=5, model_id="test-model")
+    assert result == {"processed": 3}

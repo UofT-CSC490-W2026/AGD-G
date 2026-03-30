@@ -42,3 +42,17 @@ def test_valid_subclass():
     img = Image.new("RGB", (10, 10))
     result = d([img], ["clean caption"])
     assert result == ["target for clean caption"]
+
+
+def test_generate_raw_default():
+    class Dummy(TargetingModel):
+        def __init__(self, model_tag=None):
+            pass
+
+        def __call__(self, images, clean_texts):
+            return [f"target for {t}" for t in clean_texts]
+
+    d = Dummy()
+    img = Image.new("RGB", (10, 10))
+    raw = d.generate_raw([img], ["caption"])
+    assert raw == [{"target": "target for caption", "thinking": ""}]

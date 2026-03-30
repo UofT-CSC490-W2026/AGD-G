@@ -8,6 +8,7 @@ from PIL import Image
 
 from agdg.targeting.strategies.qwen import (
     _parse_output,
+    _parse_thinking,
     SYSTEM_INSTRUCTION,
     FEW_SHOT_EXAMPLES,
 )
@@ -37,6 +38,20 @@ class TestParseOutput:
     def test_empty_output_tag(self):
         raw = "<output></output>"
         assert _parse_output(raw) == ""
+
+
+class TestParseThinking:
+    def test_extracts_from_tags(self):
+        raw = "<thinking>some reasoning</thinking>\n<output>caption</output>"
+        assert _parse_thinking(raw) == "some reasoning"
+
+    def test_returns_empty_when_no_tags(self):
+        raw = "Just a plain caption"
+        assert _parse_thinking(raw) == ""
+
+    def test_strips_whitespace(self):
+        raw = "<thinking>  padded reasoning  </thinking>"
+        assert _parse_thinking(raw) == "padded reasoning"
 
 
 class TestGetMessage:
@@ -99,6 +114,58 @@ def _install_fake_deps(monkeypatch):
     fake_transformers.AutoModelForImageTextToText = MagicMock()
     fake_transformers.AutoModelForImageTextToText.from_pretrained.return_value = fake_model
     monkeypatch.setitem(sys.modules, "transformers", fake_transformers)
+
+
+class _FakeInputs(dict):
+    """Dict subclass that supports .to() for device placement."""
+    def to(self, device):
+        return self
+
+
+class TestGenerate:
+    @pytest.fixture()
+    def model(self, monkeypatch):
+        _install_fake_deps(monkeypatch)
+        _clear_qwen_module()
+        from agdg.targeting.strategies.qwen import QwenTargetingModel
+        return QwenTargetingModel(device="cpu")
+
+    def _setup_generate(self, model, monkeypatch, decode_output):
+        fake_torch = types.SimpleNamespace(
+            no_grad=lambda: MagicMock(__enter__=MagicMock(), __exit__=MagicMock()),
+        )
+        monkeypatch.setitem(sys.modules, "torch", fake_torch)
+
+        input_ids = MagicMock()
+        input_ids.shape = (1, 5)
+        model.processor.apply_chat_template.return_value = _FakeInputs(
+            {"input_ids": input_ids}
+        )
+        model.model.generate.return_value = [MagicMock()]
+        model.processor.decode.return_value = decode_output
+
+    def test_call_returns_parsed_targets(self, model, monkeypatch):
+        self._setup_generate(model, monkeypatch, "<output>Bar chart of fruits</output>")
+
+        img = Image.new("RGB", (10, 10))
+        results = model([img], ["A chart"])
+
+        assert results == ["Bar chart of fruits"]
+
+    def test_generate_raw_returns_thinking(self, model, monkeypatch):
+        self._setup_generate(
+            model,
+            monkeypatch,
+            "<thinking>Step-by-step reasoning</thinking>\n"
+            "<output>Bar chart of fruits</output>",
+        )
+
+        img = Image.new("RGB", (10, 10))
+        results = model.generate_raw([img], ["A chart"])
+
+        assert len(results) == 1
+        assert results[0]["target"] == "Bar chart of fruits"
+        assert results[0]["thinking"] == "Step-by-step reasoning"
 
 
 def _clear_qwen_module():

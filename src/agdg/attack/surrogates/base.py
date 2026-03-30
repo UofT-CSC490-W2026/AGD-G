@@ -12,7 +12,7 @@ import torch
 from PIL import Image
 
 class ImageTargetModel(ABC):
-    def __init__(self) -> None:
+    def __init__(self) -> None:  # pragma: no cover
         super().__init__()
 
     @abstractmethod
@@ -21,7 +21,7 @@ class ImageTargetModel(ABC):
         Given two image embeddings (from embed_image), return a similarity score.
         Works with either a single image and text or a batch of each.
         """
-        pass
+        pass  # pragma: no cover
 
     @abstractmethod
     def embed_image(self, image: torch.Tensor, detach: bool = False) -> Any:
@@ -30,15 +30,15 @@ class ImageTargetModel(ABC):
         Takes single image or a batch.
         Format is irrelevant as it should only be passed to __call__.
         """
-        pass
+        pass  # pragma: no cover
 
     @abstractmethod
     def get_image_size(self) -> Tuple[int, int]:
-        pass
+        pass  # pragma: no cover
 
 
 class TextTargetModel(ImageTargetModel, ABC):
-    def __init__(self) -> None:
+    def __init__(self) -> None:  # pragma: no cover
         super().__init__()
 
     @abstractmethod
@@ -48,7 +48,7 @@ class TextTargetModel(ImageTargetModel, ABC):
         (from embed_text), return similarity scores as a tensor.
         Works with either a single image and text or a batch of each.
         """
-        pass
+        pass  # pragma: no cover
 
     @abstractmethod
     def embed_text(self, text: str | Sequence[str], detach: bool = True) -> Any:
@@ -57,7 +57,7 @@ class TextTargetModel(ImageTargetModel, ABC):
         Takes single text or a batch.
         Format is irrelevant as it should only be passed to __call__.
         """
-        pass
+        pass  # pragma: no cover
 
     @abstractmethod
     def embed_image(self, image: torch.Tensor, detach: bool = False) -> Any:
@@ -66,8 +66,8 @@ class TextTargetModel(ImageTargetModel, ABC):
         Takes single image or a batch.
         Format is irrelevant as it should only be passed to __call__.
         """
-        pass
+        pass  # pragma: no cover
 
     @abstractmethod
     def get_image_size(self) -> Tuple[int, int]:
-        pass
+        pass  # pragma: no cover

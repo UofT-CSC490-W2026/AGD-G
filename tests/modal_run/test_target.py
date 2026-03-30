@@ -49,7 +49,20 @@ def test_generate_targets_calls_pipeline(monkeypatch):
     assert result == {"processed": 12}
 
 
-def test_main_prints_remote_results(monkeypatch, capsys):
+def test_preview_targets_calls_pipeline(monkeypatch):
+    module = _load(monkeypatch)
+
+    monkeypatch.setattr(
+        module,
+        "preview_target_responses",
+        lambda **kwargs: [{"source": "X", "clean_answer": "c", "thinking": "t", "target": "tgt"}],
+    )
+
+    result = module.preview_targets(per_source=5, strategy="qwen")
+    assert len(result) == 1
+
+
+def test_main_generate_prints_remote_results(monkeypatch, capsys):
     module = _load(monkeypatch)
 
     def fake_remote(**kwargs):
@@ -57,7 +70,22 @@ def test_main_prints_remote_results(monkeypatch, capsys):
 
     module.generate_targets.remote = fake_remote
 
-    module.main(limit=5, strategy="qwen")
+    module.main(max_rows=5, strategy="qwen")
 
     out = capsys.readouterr().out
     assert "processed" in out
+
+
+def test_main_preview_prints_results(monkeypatch, capsys):
+    module = _load(monkeypatch)
+
+    def fake_remote(**kwargs):
+        return [{"source": "CB", "clean_answer": "clean", "thinking": "hmm", "target": "tgt"}]
+
+    module.preview_targets.remote = fake_remote
+
+    module.main(preview=True, per_source=3, strategy="qwen")
+
+    out = capsys.readouterr().out
+    assert "CB" in out
+    assert "tgt" in out

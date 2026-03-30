@@ -53,6 +53,47 @@ def _install_fake_transformers(monkeypatch):
     monkeypatch.setitem(sys.modules, "transformers", fake_transformers)
 
 
+def test_get_device_cuda(monkeypatch):
+    _install_fake_torch(monkeypatch)
+    _clear_targeting_modules()
+    fake_torch = sys.modules["torch"]
+    fake_torch.cuda = types.SimpleNamespace(is_available=lambda: True)
+
+    from agdg.targeting.targeting import _get_device
+    assert _get_device() == "cuda"
+
+
+def test_get_device_mps(monkeypatch):
+    _install_fake_torch(monkeypatch)
+    _clear_targeting_modules()
+    fake_torch = sys.modules["torch"]
+    fake_torch.cuda = types.SimpleNamespace(is_available=lambda: False)
+    fake_torch.backends = types.SimpleNamespace(
+        mps=types.SimpleNamespace(is_available=lambda: True)
+    )
+
+    from agdg.targeting.targeting import _get_device
+    assert _get_device() == "mps"
+
+
+def test_strategy_type_error_fallback(monkeypatch):
+    _install_fake_torch(monkeypatch)
+    _install_fake_transformers(monkeypatch)
+    _clear_targeting_modules()
+
+    from agdg.targeting import targeting as targeting_module
+
+    class NoDeviceStrategy:
+        def __init__(self):
+            self.built = True
+        def __call__(self, images, clean_texts):
+            return []
+
+    monkeypatch.setattr(targeting_module, "QwenTargetingModel", NoDeviceStrategy)
+    result = targeting_module.build_targeting_strategy("qwen", device="cpu")
+    assert result.built is True
+
+
 def _clear_targeting_modules():
     for mod in list(sys.modules):
         if mod.startswith("agdg.targeting"):

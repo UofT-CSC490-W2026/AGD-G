@@ -17,6 +17,30 @@ def test_get_device_prefers_cuda_without_real_torch(monkeypatch):
     assert _get_device() == "cuda"
 
 
+def test_get_device_falls_back_to_mps(monkeypatch):
+    from agdg.data_pipeline.clean_response import _get_device
+
+    fake_torch = types.SimpleNamespace(
+        cuda=types.SimpleNamespace(is_available=lambda: False),
+        backends=types.SimpleNamespace(mps=types.SimpleNamespace(is_available=lambda: True)),
+    )
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+
+    assert _get_device() == "mps"
+
+
+def test_get_device_falls_back_to_cpu(monkeypatch):
+    from agdg.data_pipeline.clean_response import _get_device
+
+    fake_torch = types.SimpleNamespace(
+        cuda=types.SimpleNamespace(is_available=lambda: False),
+        backends=types.SimpleNamespace(mps=types.SimpleNamespace(is_available=lambda: False)),
+    )
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+
+    assert _get_device() == "cpu"
+
+
 def test_prepare_inputs_uses_chat_template_for_llava(monkeypatch):
     from agdg.data_pipeline.clean_response import _prepare_inputs
 
@@ -146,3 +170,30 @@ def test_load_vlm_uses_generic_vqa_path(monkeypatch):
     assert dtype == "float32"
     fake_transformers.AutoModelForVisualQuestionAnswering.from_pretrained.assert_called_once()
     fake_transformers.LlavaForConditionalGeneration.from_pretrained.assert_not_called()
+
+
+def test_load_vlm_uses_llava_path(monkeypatch):
+    from agdg.data_pipeline.clean_response import load_vlm
+
+    fake_torch = types.SimpleNamespace(float16="float16", float32="float32")
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+
+    auto_processor = MagicMock()
+    llava_model = MagicMock()
+    fake_transformers = types.SimpleNamespace(
+        AutoProcessor=types.SimpleNamespace(from_pretrained=MagicMock(return_value=auto_processor)),
+        AutoModelForVisualQuestionAnswering=types.SimpleNamespace(from_pretrained=MagicMock()),
+        LlavaForConditionalGeneration=types.SimpleNamespace(
+            from_pretrained=MagicMock(return_value=llava_model)
+        ),
+    )
+    monkeypatch.setitem(sys.modules, "transformers", fake_transformers)
+
+    with patch("agdg.data_pipeline.clean_response._get_device", return_value="cpu"):
+        processor, model, device, dtype = load_vlm("llava-hf/llava-1.5-7b-hf")
+
+    assert processor is auto_processor
+    assert model is llava_model.to.return_value
+    assert device == "cpu"
+    fake_transformers.LlavaForConditionalGeneration.from_pretrained.assert_called_once()
+    fake_transformers.AutoModelForVisualQuestionAnswering.from_pretrained.assert_not_called()

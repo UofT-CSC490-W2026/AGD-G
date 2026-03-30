@@ -7,8 +7,8 @@ import boto3
 import psycopg2
 try:
     from psycopg2.extras import Json
-except Exception:
-    def Json(value):
+except Exception:  # pragma: no cover
+    def Json(value):  # pragma: no cover
         return value
 
 from agdg.data_pipeline.chart_type import ChartType

@@ -99,3 +99,22 @@ def test_ingest_skips_preprocess_when_requested(monkeypatch):
     module.ingest(max_rows=0, clean=False, skip_import=False, skip_preprocess=True)
 
     assert calls == ["chartbench", "chartx", "chartqax"]
+
+
+def test_main_delegates_to_ingest_remote(monkeypatch):
+    module = _load(monkeypatch)
+    captured = {}
+
+    def fake_remote(**kwargs):
+        captured.update(kwargs)
+
+    module.ingest.remote = fake_remote
+
+    module.main(limit=10, clean=True, skip_import=False, skip_preprocess=True)
+
+    assert captured == {
+        "max_rows": 10,
+        "clean": True,
+        "skip_import": False,
+        "skip_preprocess": True,
+    }

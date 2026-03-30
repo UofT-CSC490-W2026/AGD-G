@@ -1,4 +1,6 @@
 import types
+
+import pytest
 from PIL import Image
 
 from agdg.attack import attack as attack_module
@@ -151,3 +153,94 @@ def test_attack_leaves_source_text_empty_when_not_provided(monkeypatch):
     kwargs = FakeTextAttacker.last_instance.kwargs
     assert kwargs["target"] == "Question: Who won?\nAnswer: Ferrari"
     assert "source_text" not in kwargs["hyperparameters"]
+
+
+def test_get_device_returns_explicit_device():
+    assert attack_module._get_device("my-device") == "my-device"
+
+
+def test_get_device_auto_cpu(monkeypatch):
+    torch = pytest.importorskip("torch")
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(torch.backends.mps, "is_available", lambda: False)
+    assert attack_module._get_device() == "cpu"
+
+
+def test_get_device_auto_cuda(monkeypatch):
+    torch = pytest.importorskip("torch")
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    assert attack_module._get_device() == "cuda"
+
+
+def test_get_device_auto_mps(monkeypatch):
+    torch = pytest.importorskip("torch")
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(torch.backends.mps, "is_available", lambda: True)
+    assert attack_module._get_device() == "mps"
+
+
+def test_ensure_dependencies_loaded(monkeypatch):
+    pytest.importorskip("torch")
+    monkeypatch.setattr(attack_module, "AttackVLMImage", None)
+    monkeypatch.setattr(attack_module, "AttackVLMOCR", None)
+    monkeypatch.setattr(attack_module, "AttackVLMText", None)
+    monkeypatch.setattr(attack_module, "AttackVLMUntargeted", None)
+    monkeypatch.setattr(attack_module, "ImageCLIPModel", None)
+    monkeypatch.setattr(attack_module, "PatchTextCLIPModel", None)
+    monkeypatch.setattr(attack_module, "TextCLIPModel", None)
+    monkeypatch.setattr(attack_module, "LlavaTextTargetModel", None)
+
+    attack_module._ensure_dependencies_loaded()
+
+    assert attack_module.AttackVLMImage is not None
+    assert attack_module.TextCLIPModel is not None
+    assert attack_module.LlavaTextTargetModel is not None
+
+
+def test_build_target_model_unknown(monkeypatch):
+    setup_fakes(monkeypatch)
+    with pytest.raises(ValueError, match="Unknown surrogate model"):
+        attack_module.build_target_model("nonexistent_model")
+
+
+def test_build_attack_method_unknown(monkeypatch):
+    setup_fakes(monkeypatch)
+    with pytest.raises(ValueError, match="Unknown attacker"):
+        attack_module.build_attack_method("nonexistent_attacker", "clip_text")
+
+
+def test_generate_adversarial_untargeted(monkeypatch):
+    setup_fakes(monkeypatch)
+    result = attack_module.generate_adversarial_image(
+        attacker="untargeted",
+        model="clip_image",
+        clean_image_path="clean.png",
+    )
+    assert isinstance(result, list)
+    kwargs = FakeUntargetedAttacker.last_instance.kwargs
+    assert kwargs["clean"] == "opened:clean.png"
+    assert kwargs["strength"] == 1.0
+
+
+def test_attack_saves_single_image(monkeypatch):
+    setup_fakes(monkeypatch)
+
+    saved_paths = []
+
+    class PilImageAttacker:
+        def __init__(self, model):
+            self.model = model
+
+        def attack(self, **kwargs):
+            return Image.new("RGB", (10, 10))
+
+    monkeypatch.setattr(attack_module, "AttackVLMText", PilImageAttacker)
+    monkeypatch.setattr(Image.Image, "save", lambda self, path, **kw: saved_paths.append(path))
+
+    attack_module.attack(
+        attacker="targeted_text",
+        model="clip_text",
+        clean_image_path="clean.png",
+    )
+
+    assert saved_paths == ["/root/images/adversarial_output.png"]

@@ -69,3 +69,49 @@ def test_evaluate_all_tie(mock_aws, mock_models):
         result = evaluate_all()
 
     assert result["winners"]["Tie"] == 1
+
+
+def test_similarity_scores_direct():
+    torch = pytest.importorskip("torch")
+    from agdg.data_pipeline.eval import _similarity_scores
+
+    model = MagicMock()
+    model.encode.return_value = torch.tensor([
+        [1.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+    ])
+
+    score_a, score_b = _similarity_scores(model, "output", "text_a", "text_b")
+
+    assert score_a == pytest.approx(1.0)
+    assert score_b == pytest.approx(0.0)
+
+
+def test_evaluate_all_with_strategy(mock_aws, mock_models):
+    mock_aws["cur"].fetchall.return_value = []
+    result = evaluate_all(target_strategy="qwen")
+    assert result == {"evaluated": 0}
+    sql_call = mock_aws["cur"].execute.call_args
+    assert "AND ta.target_strategy" in sql_call[0][0]
+    assert "qwen" in sql_call[0][1]
+
+
+def test_evaluate_all_with_max_rows(mock_aws, mock_models):
+    mock_aws["cur"].fetchall.return_value = []
+    result = evaluate_all(max_rows=5)
+    assert result == {"evaluated": 0}
+    sql_call = mock_aws["cur"].execute.call_args
+    assert "LIMIT" in sql_call[0][0]
+    assert 5 in sql_call[0][1]
+
+
+def test_evaluate_all_batch_commit(mock_aws, mock_models):
+    mock_aws["cur"].fetchall.return_value = [(1, "Clean", "Target", "chart-uuid")]
+
+    with patch("agdg.data_pipeline.eval._similarity_scores", return_value=(0.1, 0.9)), \
+         patch("agdg.data_pipeline.eval.BATCH_SIZE", 1):
+        result = evaluate_all()
+
+    assert result["evaluated"] == 1
+    assert mock_aws["conn"].commit.called

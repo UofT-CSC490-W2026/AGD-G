@@ -16,7 +16,7 @@ class RawResult(TypedDict):
 class TargetingModel(ABC):
     @abstractmethod
     def __init__(self, model_tag: Optional[str] = None) -> None:
-        pass
+        pass  # pragma: no cover
 
     @abstractmethod
     def __call__(self, images: List[Image.Image], clean_texts: List[str]) -> List[str]:
@@ -24,7 +24,7 @@ class TargetingModel(ABC):
         Convert image/clean_text pairs to target texts which differ from the clean texts.
         Returns parsed target captions only (no thinking trace).
         """
-        pass
+        pass  # pragma: no cover
 
     def generate_raw(self, images: List[Image.Image], clean_texts: List[str]) -> List[RawResult]:
         """

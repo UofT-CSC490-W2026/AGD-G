@@ -198,3 +198,25 @@ def test_import_processes_multiple_splits(monkeypatch, fake_boto):
     module.import_chartx(max_rows=None)
 
     assert fake_aws.rds.insert_sample.call_count == 2
+
+
+def test_import_breaks_early_in_second_split(monkeypatch, fake_boto):
+    """When max failures is reached in one split, the next split's inner loop
+    should break immediately at the top-of-loop guard (line 71)."""
+    import pytest
+
+    module = _load(monkeypatch, fake_boto)
+    fake_aws, _, _ = build_fake_aws()
+    _install_fake_aws(module, fake_aws, monkeypatch)
+
+    bad_row = {"chart_type": "x", "img": None, "QA": None}
+    _install_fake_hf(monkeypatch, {
+        "train": [bad_row] * 51,
+        "val": [_make_row(img="./test/good.png")],
+    })
+    _install_fake_fs(monkeypatch)
+
+    with pytest.raises(RuntimeError, match="50 failures"):
+        module.import_chartx(max_rows=None)
+
+    assert fake_aws.rds.insert_sample.call_count == 0
