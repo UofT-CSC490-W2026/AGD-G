@@ -3,9 +3,9 @@
 # AGD-G
 
 <!-- coverage:project:start -->
-![PROJECT coverage](https://img.shields.io/badge/coverage-92.76%25-brightgreen)
+![PROJECT coverage](https://img.shields.io/badge/coverage-100.00%25-brightgreen)
 
-Overall automated line coverage: `92.76%`
+Overall automated line coverage: `100.00%`
 <!-- coverage:project:end -->
 
 AGD-G is a research pipeline for studying adversarial attacks on chart-based visual question
