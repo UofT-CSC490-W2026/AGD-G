@@ -42,6 +42,34 @@ class FakeConnection:
         self.closed = True
 
 
+class BatchCursor:
+    def __init__(self, batches):
+        self.executed = []
+        self._batches = list(batches)
+
+    def execute(self, query, params=None):
+        self.executed.append((query, params))
+
+    def fetchmany(self, size):
+        if self._batches:
+            return self._batches.pop(0)
+        return []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+
+class BatchConnection:
+    def __init__(self, batches):
+        self.cursor_obj = BatchCursor(batches)
+
+    def cursor(self):
+        return self.cursor_obj
+
+
 def load_aws(monkeypatch, *, s3_client=None, rds_client=None, connection=None):
     fake_boto3 = types.ModuleType("boto3")
     fake_psycopg2 = types.ModuleType("psycopg2")
@@ -64,6 +92,8 @@ def load_aws(monkeypatch, *, s3_client=None, rds_client=None, connection=None):
 
     importlib.invalidate_caches()
     sys.modules.pop("agdg.data_pipeline.aws", None)
+    sys.modules.pop("agdg.data_pipeline.aws.rds", None)
+    sys.modules.pop("agdg.data_pipeline.aws.s3", None)
     return importlib.import_module("agdg.data_pipeline.aws")
 
 
@@ -156,8 +186,8 @@ def test_create_table_if_not_exists_executes_schema_statements(monkeypatch):
     aws.create_table_if_not_exists()
 
     queries = "\n".join(query for query, _ in connection.cursor_obj.executed)
-    assert "CREATE TYPE GRAPH_TYPE AS ENUM" in queries
     assert "CREATE TABLE IF NOT EXISTS samples" in queries
+    assert "CREATE TABLE IF NOT EXISTS clean_answers" in queries
 
 
 def test_add_sample_inserts_expected_values(monkeypatch):
@@ -170,7 +200,7 @@ def test_add_sample_inserts_expected_values(monkeypatch):
         graph_type=aws.GraphType.BAR,
         question="q",
         answer="a",
-        graph="1234",
+        chart="1234",
     )
 
     query, params = cursor.executed[0]
@@ -194,7 +224,7 @@ def test_wipe_rds_drops_table_and_type(monkeypatch):
     aws.wipe_rds()
 
     queries = [query for query, _ in connection.cursor_obj.executed]
-    assert queries == ["DROP TABLE IF EXISTS samples", "DROP TYPE IF EXISTS graph_type"]
+    assert queries == ["DROP SCHEMA public CASCADE;", "CREATE SCHEMA public;"]
 
 
 def test_wipe_s3_deletes_paginated_objects(monkeypatch):
@@ -250,3 +280,111 @@ def test_wipe_s3_logs_deleted_count(monkeypatch):
     aws.wipe_s3(logger=logger)
 
     assert logger.messages == ["  Deleted 1 S3 objects"]
+
+
+def test_insert_preprocessing_wraps_meta_and_updates_sample(monkeypatch):
+    aws = load_aws(monkeypatch, s3_client=object(), connection=FakeConnection())
+    cursor = FakeCursor()
+
+    aws.rds.insert_preprocessing(cursor, 7, "chart-uuid", 800, 600, {"crop_box": [1, 2, 3, 4]})
+
+    query, params = cursor.executed[0]
+    assert "UPDATE samples" in query
+    assert params[0] == 800
+    assert params[1] == 600
+    assert getattr(params[2], "adapted", None) == {"crop_box": [1, 2, 3, 4]}
+    assert params[3:] == ("chart-uuid", 7)
+
+
+def test_insert_clean_target_and_adversarial_rows(monkeypatch):
+    aws = load_aws(monkeypatch, s3_client=object(), connection=FakeConnection())
+    cursor = FakeCursor()
+
+    aws.rds.insert_clean_answer(cursor, 3, "clean text", "llava")
+    aws.rds.insert_target_answer(cursor, 5, "target text", "smoke")
+    aws.rds.insert_adversarial_chart(cursor, 6, "adv-chart", "AttackVLM", "llava", {"steps": 20})
+    aws.rds.insert_adversarial_answer(cursor, 8, "answer", "llava", True, {"winner": "A"})
+
+    assert "INSERT INTO clean_answers" in cursor.executed[0][0]
+    assert cursor.executed[0][1] == (3, "llava", "clean text")
+    assert "INSERT INTO target_answers" in cursor.executed[1][0]
+    assert cursor.executed[1][1] == (5, "target text", "smoke")
+    assert "INSERT INTO adversarial_charts" in cursor.executed[2][0]
+    assert cursor.executed[2][1][:4] == (6, "adv-chart", "AttackVLM", "llava")
+    assert getattr(cursor.executed[2][1][4], "adapted", None) == {"steps": 20}
+    assert "INSERT INTO adversarial_answers" in cursor.executed[3][0]
+    assert cursor.executed[3][1] == (8, "llava", "answer", True, {"winner": "A"})
+
+
+def test_iter_preprocessor_inputs_batches_rows(monkeypatch):
+    aws = load_aws(monkeypatch, s3_client=object(), connection=FakeConnection())
+    conn = BatchConnection([[(1, "raw-1")], [(2, "raw-2")], []])
+
+    rows = list(aws.rds.iter_preprocessor_inputs(conn, batch_size=1))
+
+    assert rows == [
+        {"sample_id": 1, "raw_chart": "raw-1"},
+        {"sample_id": 2, "raw_chart": "raw-2"},
+    ]
+    assert "SELECT id, raw_chart" in conn.cursor_obj.executed[0][0]
+
+
+def test_iter_clean_answer_inputs_filters_by_model(monkeypatch):
+    aws = load_aws(monkeypatch, s3_client=object(), connection=FakeConnection())
+    conn = BatchConnection([[(3, "clean-uuid")], []])
+
+    rows = list(aws.rds.iter_clean_answer_inputs(conn, "llava", batch_size=10))
+
+    assert rows == [{"sample_id": 3, "clean_chart": "clean-uuid"}]
+    assert conn.cursor_obj.executed[0][1] == ("llava",)
+
+
+def test_iter_target_inputs_yields_expected_payload(monkeypatch):
+    aws = load_aws(monkeypatch, s3_client=object(), connection=FakeConnection())
+    conn = BatchConnection([[(4, "clean answer", "clean-uuid")], []])
+
+    rows = list(aws.rds.iter_target_inputs(conn, "smoke", batch_size=5))
+
+    assert rows == [
+        {
+            "clean_answer_id": 4,
+            "clean_answer": "clean answer",
+            "clean_chart": "clean-uuid",
+        }
+    ]
+    assert conn.cursor_obj.executed[0][1] == ("smoke",)
+
+
+def test_iter_attack_inputs_yields_expected_payload(monkeypatch):
+    aws = load_aws(monkeypatch, s3_client=object(), connection=FakeConnection())
+    conn = BatchConnection([[(9, "clean answer", "clean-uuid", "target answer")], []])
+
+    rows = list(aws.rds.iter_attack_inputs(conn, "AttackVLM", "llava", batch_size=2))
+
+    assert rows == [
+        {
+            "target_answer_id": 9,
+            "clean_answer": "clean answer",
+            "clean_chart": "clean-uuid",
+            "target_answer": "target answer",
+        }
+    ]
+    assert conn.cursor_obj.executed[0][1] == ("AttackVLM", "llava")
+
+
+def test_iter_eval_inputs_yields_expected_payload(monkeypatch):
+    aws = load_aws(monkeypatch, s3_client=object(), connection=FakeConnection())
+    conn = BatchConnection([[(10, "clean answer", "clean-uuid", "target answer", "adv-uuid")], []])
+
+    rows = list(aws.rds.iter_eval_inputs(conn, "llava", batch_size=2))
+
+    assert rows == [
+        {
+            "adversarial_chart_id": 10,
+            "clean_answer": "clean answer",
+            "clean_chart": "clean-uuid",
+            "target_answer": "target answer",
+            "adversarial_chart": "adv-uuid",
+        }
+    ]
+    assert conn.cursor_obj.executed[0][1] == ("llava",)

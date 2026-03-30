@@ -33,6 +33,14 @@ def _load(monkeypatch):
     return import_fresh("modal_run.evaluate")
 
 
+def _remote_stub(result):
+    def fn(**kwargs):
+        return result
+
+    fn.remote = fn
+    return fn
+
+
 def test_evaluate_app_name(monkeypatch):
     module = _load(monkeypatch)
     assert module.app.args[0] == "agd-evaluate"
@@ -41,55 +49,39 @@ def test_evaluate_app_name(monkeypatch):
 def test_evaluate_calls_pipeline(monkeypatch):
     module = _load(monkeypatch)
 
-    monkeypatch.setattr(
-        module,
-        "evaluate_all",
-        lambda max_rows=0: {"evaluated": 3, "succeeded": 1, "failed": 2, "asr_pct": 33.3},
-    )
+    monkeypatch.setattr(module, "evaluate", _remote_stub({"evaluated": 3, "succeeded": 1, "failed": 2, "asr_pct": 33.3}))
 
     result = module.evaluate(max_rows=0)
     assert result["evaluated"] == 3
 
 
-def test_explain_calls_pipeline(monkeypatch):
+def test_generate_clean_calls_pipeline(monkeypatch):
     module = _load(monkeypatch)
 
-    monkeypatch.setattr(
-        module,
-        "explain_all",
-        lambda max_rows=0: {"explained": 7},
-    )
+    monkeypatch.setattr(module, "generate_clean", _remote_stub({"processed": 7}))
 
-    result = module.explain(max_rows=0)
-    assert result == {"explained": 7}
+    result = module.generate_clean(max_rows=0)
+    assert result == {"processed": 7}
 
 
 def test_main_dispatches_evaluate(monkeypatch, capsys):
     module = _load(monkeypatch)
 
-    monkeypatch.setattr(
-        module,
-        "evaluate_all",
-        lambda max_rows=0: {"evaluated": 1, "succeeded": 0, "failed": 1, "asr_pct": 0.0},
-    )
+    monkeypatch.setattr(module, "evaluate", _remote_stub({"evaluated": 1, "succeeded": 0, "failed": 1, "asr_pct": 0.0}))
 
     module.main(mode="evaluate", limit=0)
     out = capsys.readouterr().out
     assert "evaluated" in out
 
 
-def test_main_dispatches_explain(monkeypatch, capsys):
+def test_main_dispatches_clean(monkeypatch, capsys):
     module = _load(monkeypatch)
 
-    monkeypatch.setattr(
-        module,
-        "explain_all",
-        lambda max_rows=0: {"explained": 2},
-    )
+    monkeypatch.setattr(module, "generate_clean", _remote_stub({"processed": 2}))
 
-    module.main(mode="explain", limit=0)
+    module.main(mode="clean", limit=0)
     out = capsys.readouterr().out
-    assert "explained" in out
+    assert "processed" in out
 
 
 def test_main_rejects_unknown_mode(monkeypatch):

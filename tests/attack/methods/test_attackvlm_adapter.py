@@ -1,6 +1,10 @@
 import pytest
 from unittest.mock import MagicMock, patch
 from PIL import Image
+from tests.helpers.torch_guard import require_torch
+
+require_torch()
+
 from agdg.attack.methods.attackvlm_adapter import AttackVLMTextAdapter, AttackResult
 
 @pytest.fixture

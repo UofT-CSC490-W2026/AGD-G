@@ -1,128 +1,71 @@
 import sys
-import types
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+mock_st = MagicMock()
+sys.modules["sentence_transformers"] = mock_st
+
+from agdg.data_pipeline.eval import evaluate_all
 
 
-def _install_fake_boto(monkeypatch):
-    fake_boto3 = types.ModuleType("boto3")
-    fake_boto3.client = MagicMock()
-    fake_psycopg2 = types.ModuleType("psycopg2")
-    fake_psycopg2.connect = MagicMock()
-    fake_botocore = types.ModuleType("botocore")
-    fake_botocore_exc = types.ModuleType("botocore.exceptions")
-    fake_botocore_exc.ClientError = type("ClientError", (Exception,), {})
-    fake_botocore.exceptions = fake_botocore_exc
-
-    monkeypatch.setitem(sys.modules, "boto3", fake_boto3)
-    monkeypatch.setitem(sys.modules, "psycopg2", fake_psycopg2)
-    monkeypatch.setitem(sys.modules, "botocore", fake_botocore)
-    monkeypatch.setitem(sys.modules, "botocore.exceptions", fake_botocore_exc)
+@pytest.fixture
+def mock_aws():
+    with patch("agdg.data_pipeline.eval.rds.get_db_connection") as mock_db, patch(
+        "agdg.data_pipeline.eval.s3.get_image", return_value=b"png"
+    ):
+        conn = MagicMock()
+        cur = MagicMock()
+        conn.cursor.return_value.__enter__.return_value = cur
+        mock_db.return_value.__enter__.return_value = conn
+        yield {"cur": cur, "conn": conn}
 
 
-class FakeCursor:
-    def __init__(self, rows, updates):
-        self.rows = rows
-        self.updates = updates
-        self.rowcount = 1
+@pytest.fixture
+def mock_models():
+    sim_model = MagicMock()
+    mock_st.SentenceTransformer.return_value = sim_model
 
-    def execute(self, query, params=None):
-        if query.lstrip().startswith("UPDATE"):
-            self.updates.append((query, params))
-
-    def fetchall(self):
-        return list(self.rows)
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc, tb):
-        return False
+    with patch("agdg.data_pipeline.eval.get_device", return_value="cpu"), patch(
+        "agdg.data_pipeline.eval.load_vlm", return_value=(MagicMock(), MagicMock(), "cpu", "float32")
+    ), patch(
+        "agdg.data_pipeline.eval.generate_image_response", return_value="Target text"
+    ):
+        yield {"sim_model": sim_model}
 
 
-class FakeConnection:
-    def __init__(self, rows, updates):
-        self.rows = rows
-        self.updates = updates
-        self.commits = 0
-
-    def cursor(self):
-        return FakeCursor(self.rows, self.updates)
-
-    def commit(self):
-        self.commits += 1
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc, tb):
-        return False
+def test_evaluate_all_no_rows(mock_aws, mock_models):
+    mock_aws["cur"].fetchall.return_value = []
+    result = evaluate_all()
+    assert result == {"evaluated": 0}
 
 
-def _load_module(monkeypatch, rows):
-    import importlib
-    _install_fake_boto(monkeypatch)
-    updates = []
+def test_evaluate_all_success(mock_aws, mock_models):
+    mock_aws["cur"].fetchall.return_value = [(1, "Clean caption", "Target text", "chart-uuid")]
 
-    class FakeConnectionFactory:
-        def __init__(self):
-            self.calls = 0
-
-        def __call__(self):
-            self.calls += 1
-            return FakeConnection(rows if self.calls == 1 else [], updates)
-
-    factory = FakeConnectionFactory()
-
-    sys.modules.pop("agdg.data_pipeline.aws", None)
-    sys.modules.pop("agdg.data_pipeline.eval", None)
-    module = importlib.import_module("agdg.data_pipeline.eval")
-
-    monkeypatch.setattr(module, "get_db_connection", factory)
-    monkeypatch.setattr(module, "get_image", lambda key: f"image:{key}".encode())
-
-    return module, updates, factory
-
-
-def test_evaluate_all_returns_zero_when_no_rows(monkeypatch):
-    module, updates, _ = _load_module(monkeypatch, [])
-    result = module.evaluate_all()
-    assert result == {"evaluated": 0, "succeeded": 0, "failed": 0}
-    assert updates == []
-
-
-def test_evaluate_all_updates_rows_and_reports_counts(monkeypatch):
-    rows = [(1, "adv-1", "What happened?", "Correct answer")]
-    module, updates, _ = _load_module(monkeypatch, rows)
-
-    result = module.evaluate_all()
-
-    assert result["evaluated"] == 1
-    assert result["succeeded"] == 0
-    assert result["failed"] == 1
-    assert result["asr_pct"] == 0.0
-    assert updates[0][1] == ("Correct answer", False, 1)
-
-
-def test_evaluate_all_counts_success_and_commits_batches(monkeypatch):
-    class ToggleAnswer:
-        def __init__(self):
-            self.calls = 0
-
-        def strip(self):
-            return self
-
-        def lower(self):
-            self.calls += 1
-            return "first" if self.calls == 1 else "second"
-
-    rows = [(1, "adv-1", "What happened?", ToggleAnswer())]
-    module, updates, factory = _load_module(monkeypatch, rows)
-    module.BATCH_SIZE = 1
-
-    result = module.evaluate_all()
+    with patch("agdg.data_pipeline.eval._similarity_scores", return_value=(0.1, 0.9)):
+        result = evaluate_all()
 
     assert result["evaluated"] == 1
     assert result["succeeded"] == 1
-    assert result["failed"] == 0
-    assert result["asr_pct"] == 100.0
-    assert factory.calls == 2
+    assert result["winners"]["B"] == 1
+
+    update_calls = [call for call in mock_aws["cur"].execute.call_args_list if "INSERT INTO adversarial_answers" in call[0][0]]
+    assert len(update_calls) == 1
+    assert update_calls[0][0][1][0:4] == (1, "llava-hf/llava-1.5-7b-hf", "Target text", True)
+
+
+def test_evaluate_all_missing_data(mock_aws, mock_models):
+    with patch("agdg.data_pipeline.eval.generate_image_response", side_effect=Exception("bad image")):
+        mock_aws["cur"].fetchall.return_value = [(1, "Clean", "Target", "chart-uuid")]
+        result = evaluate_all()
+    assert result["evaluated"] == 0
+
+
+def test_evaluate_all_tie(mock_aws, mock_models):
+    mock_aws["cur"].fetchall.return_value = [(1, "A", "B", "chart-uuid")]
+
+    with patch("agdg.data_pipeline.eval._similarity_scores", return_value=(0.8, 0.8)):
+        result = evaluate_all()
+
+    assert result["winners"]["Tie"] == 1

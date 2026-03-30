@@ -2,7 +2,7 @@ from typing import Optional
 import json
 import logging
 
-from agdg.data_pipeline import aws
+from agdg.data_pipeline.aws import rds, s3
 
 TARGET_SIZE = 512
 PAD_COLOR = (255, 255, 255)
@@ -119,30 +119,17 @@ def preprocess_all():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     log = logging.getLogger("preprocess_charts")
 
-    with aws.get_db_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT DISTINCT raw_graph
-                FROM samples
-                WHERE good_graph IS NULL
-            """)
-            raw_uuids = [row[0] for row in cur.fetchall()]
-
-    log.info(f"Found {len(raw_uuids)} unique images to preprocess")
-
-    if not raw_uuids:
-        log.info("Nothing to process")
-        return {"unique_images": 0, "rows_updated": 0, "skipped": 0}
-
     processed_count = 0
     skipped_count = 0
     rows_updated = 0
 
-    with aws.get_db_connection() as conn:
+    with rds.get_db_connection() as conn:
         with conn.cursor() as cur:
-            for raw_uuid in raw_uuids:
+            for row in rds.iter_preprocessor_inputs(conn):
+                sample_id = row["sample_id"]
+                raw_uuid = row["raw_chart"]
                 try:
-                    raw_bytes = aws.get_image(raw_uuid)
+                    raw_bytes = s3.get_image(raw_uuid)
                 except KeyError:
                     log.warning(f"  Not found in S3: {raw_uuid}")
                     skipped_count += 1
@@ -154,18 +141,17 @@ def preprocess_all():
                     skipped_count += 1
                     continue
 
-                processed_uuid = aws.put_image(result["image_bytes"])
+                processed_uuid = s3.put_image(result["image_bytes"])
 
-                meta_json = json.dumps(result["meta"])
                 original_width = result["original_width"]
                 original_height = result["original_height"]
-                cur.execute(
-                    """
-                    UPDATE samples
-                    SET good_graph = %s, preprocess_meta = %s, original_width = %s, original_height = %s
-                    WHERE raw_graph = %s AND good_graph IS NULL
-                    """,
-                    (str(processed_uuid), meta_json, original_width, original_height, str(raw_uuid)),
+                rds.insert_preprocessing(
+                    cur,
+                    sample_id,
+                    processed_uuid,
+                    original_width,
+                    original_height,
+                    result["meta"],
                 )
                 rows_updated += cur.rowcount
                 processed_count += 1
@@ -173,7 +159,7 @@ def preprocess_all():
                 if processed_count % BATCH_SIZE == 0:
                     conn.commit()
                     log.info(
-                        f"  Processed {processed_count}/{len(raw_uuids)} images "
+                        f"  Processed {processed_count} images "
                         f"({rows_updated} rows updated)"
                     )
 

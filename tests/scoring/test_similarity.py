@@ -1,7 +1,9 @@
 import pytest
 from unittest.mock import MagicMock
-import torch
+from tests.helpers.torch_guard import require_torch
 from agdg.scoring.similarity import determine_winner, evaluate_similarity, get_device
+
+torch = require_torch()
 
 # --- Tests for the Core Mathematical Logic ---
 

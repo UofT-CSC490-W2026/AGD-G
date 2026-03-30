@@ -4,6 +4,7 @@ version = "0.1.0"
 dependencies = [
 	"accelerate",
 	"boto3",
+	"datasets",
 	"diffusers",
 	"huggingface_hub",
 	"modal",
@@ -13,6 +14,8 @@ dependencies = [
 	"pytest",
 	"pytest-cov",
 	"python-dotenv",
+	"sentence-transformers",
+	"tf-keras",
 	"torch",
 	"tqdm",
 	"transformers",

@@ -1,6 +1,3 @@
-import torch
-import torch.nn.functional as F
-
 def determine_winner(score_a: float, score_b: float, cutoff_score: float = 0.5, margin: float = 0.02) -> str:
     """
     Determines the winning text based on similarity scores.
@@ -27,10 +24,12 @@ def determine_winner(score_a: float, score_b: float, cutoff_score: float = 0.5, 
     else:
         return "B"
 
-def get_device() -> torch.device:
+def get_device():
     """
     Returns the CUDA device if available, then MPS (Apple Silicon), otherwise falls back to CPU.
     """
+    import torch
+
     if torch.cuda.is_available():
         return torch.device("cuda")
     elif torch.backends.mps.is_available():
@@ -42,6 +41,8 @@ def evaluate_similarity(model, output_text: str, text_a: str, text_b: str, cutof
     Generates embeddings and evaluates text similarity.
     Expects an already-initialized SentenceTransformer model to be passed in.
     """
+    import torch.nn.functional as F
+
     embeddings = model.encode([output_text, text_a, text_b], convert_to_tensor=True)
     
     # Separate the tensors and add a batch dimension for the PyTorch function

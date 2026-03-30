@@ -19,6 +19,7 @@ def build_data_pipeline_image():
     return (
         modal.Image.debian_slim(python_version="3.11")
         .pip_install_from_pyproject("pyproject.toml")
+        .add_local_file("src/agdg/data_pipeline/aws/schema.sql", "/root/agdg/data_pipeline/aws/schema.sql", copy=True)
         .add_local_python_source("agdg")
         .add_local_python_source("modal_run")
     )

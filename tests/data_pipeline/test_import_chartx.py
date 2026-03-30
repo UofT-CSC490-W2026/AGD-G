@@ -21,6 +21,11 @@ def _load(monkeypatch, fake_boto):
     return importlib.import_module("agdg.data_pipeline.import_chartx")
 
 
+def _install_fake_aws(module, fake_aws, monkeypatch):
+    monkeypatch.setattr(module, "rds", fake_aws.rds)
+    monkeypatch.setattr(module, "s3", fake_aws.s3)
+
+
 # ---------------------------------------------------------------------------
 # HuggingFace / filesystem fakes
 # ---------------------------------------------------------------------------
@@ -81,24 +86,24 @@ def _make_row(chart_type="bar_chart", img="./test/chart1.png", q="Q?", a="A"):
 
 def test_chart_type_to_graph_type_known_types(monkeypatch, fake_boto):
     module = _load(monkeypatch, fake_boto)
-    from agdg.data_pipeline.schema import GraphType
+    from agdg.data_pipeline.chart_type import ChartType
 
-    assert module.chart_type_to_graph_type("bar_chart") == GraphType.BAR
-    assert module.chart_type_to_graph_type("line_chart") == GraphType.LINE
-    assert module.chart_type_to_graph_type("pie_chart") == GraphType.PIE
-    assert module.chart_type_to_graph_type("heatmap") == GraphType.HEATMAP
-    assert module.chart_type_to_graph_type("radar") == GraphType.RADAR
-    assert module.chart_type_to_graph_type("treemap") == GraphType.TREEMAP
-    assert module.chart_type_to_graph_type("3D-Bar") == GraphType.THREE_D
-    assert module.chart_type_to_graph_type("candlestick") == GraphType.CANDLE
-    assert module.chart_type_to_graph_type("bubble") == GraphType.SCATTER
+    assert module.chart_type_to_graph_type("bar_chart") == ChartType.BAR
+    assert module.chart_type_to_graph_type("line_chart") == ChartType.LINE
+    assert module.chart_type_to_graph_type("pie_chart") == ChartType.PIE
+    assert module.chart_type_to_graph_type("heatmap") == ChartType.HEATMAP
+    assert module.chart_type_to_graph_type("radar") == ChartType.RADAR
+    assert module.chart_type_to_graph_type("treemap") == ChartType.TREEMAP
+    assert module.chart_type_to_graph_type("3D-Bar") == ChartType.THREE_D
+    assert module.chart_type_to_graph_type("candlestick") == ChartType.CANDLE
+    assert module.chart_type_to_graph_type("bubble") == ChartType.SCATTER
 
 
 def test_chart_type_to_graph_type_unknown_falls_back(monkeypatch, fake_boto):
     module = _load(monkeypatch, fake_boto)
-    from agdg.data_pipeline.schema import GraphType
+    from agdg.data_pipeline.chart_type import ChartType
 
-    assert module.chart_type_to_graph_type("unknown_xyz") == GraphType.OTHER
+    assert module.chart_type_to_graph_type("unknown_xyz") == ChartType.OTHER
 
 
 # ---------------------------------------------------------------------------
@@ -108,15 +113,15 @@ def test_chart_type_to_graph_type_unknown_falls_back(monkeypatch, fake_boto):
 def test_import_inserts_rows_and_commits(monkeypatch, fake_boto):
     module = _load(monkeypatch, fake_boto)
     fake_aws, put_calls, conn = build_fake_aws()
-    monkeypatch.setattr(module, "aws", fake_aws)
+    _install_fake_aws(module, fake_aws, monkeypatch)
     _install_fake_hf(monkeypatch, {"train": [_make_row()]})
     _install_fake_fs(monkeypatch)
 
     module.import_chartx(max_rows=1)
 
-    fake_aws.create_table_if_not_exists.assert_called_once()
-    fake_aws.add_sample.assert_called_once()
-    args = fake_aws.add_sample.call_args[0]
+    fake_aws.rds.create_table_if_not_exists.assert_called_once()
+    fake_aws.rds.insert_sample.assert_called_once()
+    args = fake_aws.rds.insert_sample.call_args[0]
     assert args[1] == "ChartX"
     assert args[3] == "Q?"
     assert args[4] == "A"
@@ -127,33 +132,33 @@ def test_import_inserts_rows_and_commits(monkeypatch, fake_boto):
 def test_import_respects_max_rows(monkeypatch, fake_boto):
     module = _load(monkeypatch, fake_boto)
     fake_aws, _, _ = build_fake_aws()
-    monkeypatch.setattr(module, "aws", fake_aws)
+    _install_fake_aws(module, fake_aws, monkeypatch)
     rows = [_make_row(img=f"./test/chart{i}.png") for i in range(5)]
     _install_fake_hf(monkeypatch, {"train": rows})
     _install_fake_fs(monkeypatch)
 
     module.import_chartx(max_rows=2)
 
-    assert fake_aws.add_sample.call_count == 2
+    assert fake_aws.rds.insert_sample.call_count == 2
 
 
 def test_import_none_max_rows_processes_all(monkeypatch, fake_boto):
     module = _load(monkeypatch, fake_boto)
     fake_aws, _, _ = build_fake_aws()
-    monkeypatch.setattr(module, "aws", fake_aws)
+    _install_fake_aws(module, fake_aws, monkeypatch)
     rows = [_make_row(img=f"./test/chart{i}.png") for i in range(3)]
     _install_fake_hf(monkeypatch, {"train": rows})
     _install_fake_fs(monkeypatch)
 
     module.import_chartx(max_rows=None)
 
-    assert fake_aws.add_sample.call_count == 3
+    assert fake_aws.rds.insert_sample.call_count == 3
 
 
 def test_import_counts_failures_and_continues(monkeypatch, fake_boto):
     module = _load(monkeypatch, fake_boto)
     fake_aws, _, _ = build_fake_aws()
-    monkeypatch.setattr(module, "aws", fake_aws)
+    _install_fake_aws(module, fake_aws, monkeypatch)
 
     good_row = _make_row(img="./test/good.png")
     bad_row = {"chart_type": "bar_chart", "img": None, "QA": None}
@@ -162,7 +167,7 @@ def test_import_counts_failures_and_continues(monkeypatch, fake_boto):
 
     module.import_chartx(max_rows=2)
 
-    assert fake_aws.add_sample.call_count == 1
+    assert fake_aws.rds.insert_sample.call_count == 1
 
 
 def test_import_stops_after_max_failures(monkeypatch, fake_boto):
@@ -170,7 +175,7 @@ def test_import_stops_after_max_failures(monkeypatch, fake_boto):
 
     module = _load(monkeypatch, fake_boto)
     fake_aws, _, _ = build_fake_aws()
-    monkeypatch.setattr(module, "aws", fake_aws)
+    _install_fake_aws(module, fake_aws, monkeypatch)
 
     bad_row = {"chart_type": "x", "img": None, "QA": None}
     _install_fake_hf(monkeypatch, {"train": [bad_row] * 51})
@@ -183,7 +188,7 @@ def test_import_stops_after_max_failures(monkeypatch, fake_boto):
 def test_import_processes_multiple_splits(monkeypatch, fake_boto):
     module = _load(monkeypatch, fake_boto)
     fake_aws, _, _ = build_fake_aws()
-    monkeypatch.setattr(module, "aws", fake_aws)
+    _install_fake_aws(module, fake_aws, monkeypatch)
     _install_fake_hf(monkeypatch, {
         "train": [_make_row(img="./test/t1.png")],
         "test": [_make_row(img="./test/t2.png")],
@@ -192,4 +197,4 @@ def test_import_processes_multiple_splits(monkeypatch, fake_boto):
 
     module.import_chartx(max_rows=None)
 
-    assert fake_aws.add_sample.call_count == 2
+    assert fake_aws.rds.insert_sample.call_count == 2

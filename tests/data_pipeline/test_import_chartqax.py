@@ -22,6 +22,11 @@ def _load(monkeypatch, fake_boto):
     return importlib.import_module("agdg.data_pipeline.import_chartqax")
 
 
+def _install_fake_aws(module, fake_aws, monkeypatch):
+    monkeypatch.setattr(module, "rds", fake_aws.rds)
+    monkeypatch.setattr(module, "s3", fake_aws.s3)
+
+
 # ---------------------------------------------------------------------------
 # HuggingFace / filesystem fakes
 # ---------------------------------------------------------------------------
@@ -70,17 +75,17 @@ def _install_fake_fs(monkeypatch):
 
 def test_map_graph_type_known(monkeypatch, fake_boto):
     module = _load(monkeypatch, fake_boto)
-    from agdg.data_pipeline.schema import GraphType
+    from agdg.data_pipeline.chart_type import ChartType
 
-    assert module._map_graph_type("two_col") == GraphType.BAR
-    assert module._map_graph_type("multi_col") == GraphType.BAR
+    assert module._map_graph_type("two_col") == ChartType.BAR
+    assert module._map_graph_type("multi_col") == ChartType.BAR
 
 
 def test_map_graph_type_unknown(monkeypatch, fake_boto):
     module = _load(monkeypatch, fake_boto)
-    from agdg.data_pipeline.schema import GraphType
+    from agdg.data_pipeline.chart_type import ChartType
 
-    assert module._map_graph_type("alien") == GraphType.OTHER
+    assert module._map_graph_type("alien") == ChartType.OTHER
 
 
 # ---------------------------------------------------------------------------
@@ -205,7 +210,7 @@ def test_get_image_raises_when_missing(monkeypatch, fake_boto):
 def test_import_dataset_inserts_rows(monkeypatch, fake_boto):
     module = _load(monkeypatch, fake_boto)
     fake_aws, put_calls, _ = build_fake_aws()
-    monkeypatch.setattr(module, "aws", fake_aws)
+    _install_fake_aws(module, fake_aws, monkeypatch)
     _install_fake_fs(monkeypatch)
 
     from .conftest import FakeCursor
@@ -224,14 +229,14 @@ def test_import_dataset_inserts_rows(monkeypatch, fake_boto):
 
     module._import_dataset(splits, cursor, "/tmp/extract", "ChartQA-X", max_rows=1)
 
-    fake_aws.add_sample.assert_called_once()
+    fake_aws.rds.insert_sample.assert_called_once()
     assert len(put_calls) == 1
 
 
 def test_import_dataset_respects_max_rows(monkeypatch, fake_boto):
     module = _load(monkeypatch, fake_boto)
     fake_aws, _, _ = build_fake_aws()
-    monkeypatch.setattr(module, "aws", fake_aws)
+    _install_fake_aws(module, fake_aws, monkeypatch)
     _install_fake_fs(monkeypatch)
 
     from .conftest import FakeCursor
@@ -248,13 +253,13 @@ def test_import_dataset_respects_max_rows(monkeypatch, fake_boto):
 
     module._import_dataset({"train": rows}, cursor, "/tmp/e", "ChartQA-X", max_rows=2)
 
-    assert fake_aws.add_sample.call_count == 2
+    assert fake_aws.rds.insert_sample.call_count == 2
 
 
 def test_import_dataset_skips_rows_with_missing_image(monkeypatch, fake_boto):
     module = _load(monkeypatch, fake_boto)
     fake_aws, _, _ = build_fake_aws()
-    monkeypatch.setattr(module, "aws", fake_aws)
+    _install_fake_aws(module, fake_aws, monkeypatch)
 
     monkeypatch.setattr(os.path, "exists", lambda p: False)
 
@@ -265,13 +270,13 @@ def test_import_dataset_skips_rows_with_missing_image(monkeypatch, fake_boto):
 
     module._import_dataset({"train": [row]}, cursor, "/tmp/e", "ChartQA-X", max_rows=None)
 
-    fake_aws.add_sample.assert_not_called()
+    fake_aws.rds.insert_sample.assert_not_called()
 
 
 def test_import_dataset_extracts_qa_from_fallback_fields(monkeypatch, fake_boto):
     module = _load(monkeypatch, fake_boto)
     fake_aws, _, _ = build_fake_aws()
-    monkeypatch.setattr(module, "aws", fake_aws)
+    _install_fake_aws(module, fake_aws, monkeypatch)
     _install_fake_fs(monkeypatch)
 
     from .conftest import FakeCursor
@@ -287,7 +292,7 @@ def test_import_dataset_extracts_qa_from_fallback_fields(monkeypatch, fake_boto)
 
     module._import_dataset({"train": [row]}, cursor, "/tmp/e", "ChartQA-X", max_rows=1)
 
-    args = fake_aws.add_sample.call_args[0]
+    args = fake_aws.rds.insert_sample.call_args[0]
     assert args[3] == "Fallback Q?"
     assert args[4] == "Fallback A"
 
@@ -299,7 +304,7 @@ def test_import_dataset_extracts_qa_from_fallback_fields(monkeypatch, fake_boto)
 def test_import_chartqax_downloads_zip_when_env_set(monkeypatch, fake_boto):
     module = _load(monkeypatch, fake_boto)
     fake_aws, _, _ = build_fake_aws()
-    monkeypatch.setattr(module, "aws", fake_aws)
+    _install_fake_aws(module, fake_aws, monkeypatch)
 
     pil_img = Image.new("RGB", (16, 16))
     splits = {"train": [{"chart_type": "x", "QA": {"input": "Q", "output": "A"}, "image": pil_img}]}
@@ -327,7 +332,7 @@ def test_import_chartqax_downloads_zip_when_env_set(monkeypatch, fake_boto):
 def test_import_chartqax_calls_create_table_and_processes(monkeypatch, fake_boto):
     module = _load(monkeypatch, fake_boto)
     fake_aws, put_calls, _ = build_fake_aws()
-    monkeypatch.setattr(module, "aws", fake_aws)
+    _install_fake_aws(module, fake_aws, monkeypatch)
 
     pil_img = Image.new("RGB", (16, 16), (0, 255, 0))
     splits = {
@@ -344,5 +349,5 @@ def test_import_chartqax_calls_create_table_and_processes(monkeypatch, fake_boto
 
     module.import_chartqax(max_rows=1)
 
-    fake_aws.create_table_if_not_exists.assert_called_once()
-    fake_aws.add_sample.assert_called_once()
+    fake_aws.rds.create_table_if_not_exists.assert_called_once()
+    fake_aws.rds.insert_sample.assert_called_once()

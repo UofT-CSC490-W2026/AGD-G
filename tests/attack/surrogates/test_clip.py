@@ -1,10 +1,11 @@
 import types
 import sys
 
-import torch
+from tests.helpers.torch_guard import require_torch
+
+torch = require_torch()
 
 from agdg.attack.surrogates.clip import CLIPModel, ImageCLIPModel, PatchTextCLIPModel, TextCLIPModel
-
 
 def build_base_model(image_size=8):
     model = object.__new__(CLIPModel)

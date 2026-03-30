@@ -2,34 +2,34 @@
 ChartX data pipeline: loads the ChartX dataset from Hugging Face, processes chart images
 and QA pairs, and writes metadata to RDS and images to S3.
 """
-from agdg.data_pipeline import aws
-from agdg.data_pipeline.schema import GraphType
+from agdg.data_pipeline.aws import rds, s3
+from agdg.data_pipeline.chart_type import ChartType
 
 CHART_TYPE_TO_GRAPH_TYPE = {
-    "3D-Bar": GraphType.THREE_D,
-    "bar_chart_num": GraphType.BAR,
-    "bar_chart": GraphType.BAR,
-    "histogram": GraphType.BAR,
-    "candlestick": GraphType.CANDLE,
-    "multi-axes": GraphType.OTHER,
-    "rings": GraphType.PIE,
-    "area_chart": GraphType.AREA,
-    "box": GraphType.BOX,
-    "funnel": GraphType.BAR,
-    "line_chart": GraphType.LINE,
-    "line_chart_num": GraphType.LINE,
-    "pie_chart": GraphType.PIE,
-    "rose": GraphType.RADAR,
-    "bubble": GraphType.SCATTER,
-    "heatmap": GraphType.HEATMAP,
-    "radar": GraphType.RADAR,
-    "treemap": GraphType.TREEMAP,
+    "3D-Bar": ChartType.THREE_D,
+    "bar_chart_num": ChartType.BAR,
+    "bar_chart": ChartType.BAR,
+    "histogram": ChartType.BAR,
+    "candlestick": ChartType.CANDLE,
+    "multi-axes": ChartType.OTHER,
+    "rings": ChartType.PIE,
+    "area_chart": ChartType.AREA,
+    "box": ChartType.BOX,
+    "funnel": ChartType.BAR,
+    "line_chart": ChartType.LINE,
+    "line_chart_num": ChartType.LINE,
+    "pie_chart": ChartType.PIE,
+    "rose": ChartType.RADAR,
+    "bubble": ChartType.SCATTER,
+    "heatmap": ChartType.HEATMAP,
+    "radar": ChartType.RADAR,
+    "treemap": ChartType.TREEMAP,
 }
 
 
-def chart_type_to_graph_type(chart_type: str) -> GraphType:
+def chart_type_to_graph_type(chart_type: str) -> ChartType:
     """Map a ChartX chart_type string to GraphType. Returns OTHER for unknown types."""
-    return CHART_TYPE_TO_GRAPH_TYPE.get(chart_type, GraphType.OTHER)
+    return CHART_TYPE_TO_GRAPH_TYPE.get(chart_type, ChartType.OTHER)
 
 
 def import_chartx(max_rows: int | None = None):
@@ -43,7 +43,7 @@ def import_chartx(max_rows: int | None = None):
 
     CHARTX_SOURCE = "ChartX"
 
-    aws.create_table_if_not_exists()
+    rds.create_table_if_not_exists()
 
     ds = load_dataset("InternScience/ChartX")
 
@@ -53,7 +53,7 @@ def import_chartx(max_rows: int | None = None):
         repo_type="dataset",
     )
 
-    with aws.get_db_connection() as conn:
+    with rds.get_db_connection() as conn:
         extract_path = "/tmp"
         os.makedirs(extract_path, exist_ok=True)
         with zipfile.ZipFile(zip_path, "r") as z:
@@ -83,13 +83,13 @@ def import_chartx(max_rows: int | None = None):
                         image_bytes = io.BytesIO()
                         image.save(image_bytes, format='PNG')
                         image_bytes = image_bytes.getvalue()
-                        uuid = aws.put_image(image_bytes)
+                        uuid = s3.put_image(image_bytes)
 
                         graph_type = chart_type_to_graph_type(chart_type)
 
                         print(f'[SAMPLE {processed+1}] {graph_type} GRAPH ({len(image_bytes)} bytes): "{question}" "{answer}"')
 
-                        aws.add_sample(
+                        rds.insert_sample(
                             cursor,
                             CHARTX_SOURCE,
                             str(graph_type),

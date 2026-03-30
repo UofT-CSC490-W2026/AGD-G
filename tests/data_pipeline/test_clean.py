@@ -31,11 +31,15 @@ def test_clean_runs_expected_aws_steps(monkeypatch):
     module = _load_module(monkeypatch)
     calls = []
 
-    fake_aws = types.ModuleType("agdg.data_pipeline.aws")
-    fake_aws.wipe_s3 = lambda logger=None: calls.append("wipe_s3")
-    fake_aws.wipe_rds = lambda: calls.append("wipe_rds")
-    fake_aws.create_table_if_not_exists = lambda: calls.append("create_table")
-    monkeypatch.setattr(module, "aws", fake_aws)
+    fake_rds = types.SimpleNamespace(
+        wipe_rds=lambda: calls.append("wipe_rds"),
+        create_table_if_not_exists=lambda: calls.append("create_table"),
+    )
+    fake_s3 = types.SimpleNamespace(
+        wipe_s3=lambda logger=None: calls.append("wipe_s3"),
+    )
+    monkeypatch.setattr(module, "rds", fake_rds)
+    monkeypatch.setattr(module, "s3", fake_s3)
 
     module.clean()
 
